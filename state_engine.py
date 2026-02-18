@@ -164,8 +164,14 @@ class StateEngine:
 
         date_dt = parse_date(date)
 
-        pA = self.players[A]
-        pB = self.players[B]
+        # IMPORTANT: avoid mutating player store during inference for unseen players.
+        # Using defaultdict indexing here would create new PlayerState entries.
+        pA = self.players.get(A)
+        pB = self.players.get(B)
+        if pA is None:
+            pA = PlayerState()
+        if pB is None:
+            pB = PlayerState()
 
         # decay before feature extraction
         self._apply_decay(pA, date_dt)
@@ -198,8 +204,10 @@ class StateEngine:
             "surface_penalty_diff": float(penA - penB),
 
             # H2H
-            "h2h_diff": float(self.h2h[(A, B)] - self.h2h[(B, A)]),
-            "h2h_surface_diff": float(self.h2h_surface[(A, B, surface)] - self.h2h_surface[(B, A, surface)]),
+            "h2h_diff": float(self.h2h.get((A, B), 0) - self.h2h.get((B, A), 0)),
+            "h2h_surface_diff": float(
+                self.h2h_surface.get((A, B, surface), 0) - self.h2h_surface.get((B, A, surface), 0)
+            ),
 
             # context
             "round": float(rnd),

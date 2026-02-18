@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from odds_theoddsapi import list_active_tennis_sports, fetch_h2h_odds_for_sport, best_decimal_odds_from_event
-from predictor import Predictor, to_dataset_name
+from predictor import Predictor
 
 MODE = os.getenv("MODE", "ATP")  # ATP/WTA (для модели)
 MODEL_PATH = f"model/{MODE.lower()}_model.pkl"
@@ -73,8 +73,10 @@ def main():
         dt = (ev.get("commence_time") or "")[:10] or None
 
         total_players += 2
-        known_players += int(to_dataset_name(A) in pred.engine.players)
-        known_players += int(to_dataset_name(B) in pred.engine.players)
+        _, a_known = pred.resolve_dataset_name(A)
+        _, b_known = pred.resolve_dataset_name(B)
+        known_players += int(a_known)
+        known_players += int(b_known)
 
         out = pred.predict_event(
             playerA=A,

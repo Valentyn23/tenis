@@ -21,6 +21,7 @@
 #   out = p.predict_event("Carlos Alcaraz","Novak Djokovic",1.85,2.05,surface="Hard", level=2, rnd=4)
 
 import math
+import re
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -138,12 +139,54 @@ class Predictor:
             )
 
         self.engine = eng
+        self._known_players = set(self.engine.players.keys())
+        self._exact_name_lookup = {p.lower(): p for p in self._known_players}
+        self._surname_initial_lookup = self._build_surname_initial_lookup()
         total_player_matches = sum(st.matches for st in self.engine.players.values())
         inferred_matches = total_player_matches / 2.0
         print(
             f"Loaded StateEngine from {state_path} | "
             f"players: {len(self.engine.players)} | inferred_matches: {inferred_matches:.0f}"
         )
+
+    def _build_surname_initial_lookup(self) -> Dict[tuple[str, str], Optional[str]]:
+        lookup: Dict[tuple[str, str], Optional[str]] = {}
+        pat = re.compile(r"^(.+)\s+([A-Z])\.$")
+        for p in self._known_players:
+            m = pat.match(p)
+            if not m:
+                continue
+            key = (m.group(1).strip().lower(), m.group(2))
+            if key in lookup and lookup[key] != p:
+                lookup[key] = None
+            else:
+                lookup[key] = p
+        return lookup
+
+    def resolve_dataset_name(self, raw_name: str) -> tuple[str, bool]:
+        raw = str(raw_name).strip()
+        if not raw:
+            return raw, False
+
+        if raw in self._known_players:
+            return raw, True
+
+        exact = self._exact_name_lookup.get(raw.lower())
+        if exact:
+            return exact, True
+
+        canonical = to_dataset_name(raw)
+        if canonical in self._known_players:
+            return canonical, True
+
+        parts = [p for p in raw.split() if p]
+        if len(parts) >= 2:
+            key = (parts[-1].lower(), parts[0][0].upper())
+            found = self._surname_initial_lookup.get(key)
+            if found:
+                return found, True
+
+        return canonical, False
 
     # -----------------------------------------------------
     # GEMINI FEATURES (raw names)
@@ -193,14 +236,45 @@ class Predictor:
         playerB_raw = str(playerB)
 
         # normalize to dataset naming for StateEngine
-        playerA_ds = to_dataset_name(playerA_raw)
-        playerB_ds = to_dataset_name(playerB_raw)
+        playerA_ds, playerA_known = self.resolve_dataset_name(playerA_raw)
+        playerB_ds, playerB_known = self.resolve_dataset_name(playerB_raw)
 
         if self.debug:
-            a_in = playerA_ds in self.engine.players
-            b_in = playerB_ds in self.engine.players
             print(f"[DEBUG] ODDS: {playerA_raw} vs {playerB_raw}")
-            print(f"[DEBUG] DS  : {playerA_ds} ({'FOUND' if a_in else 'NEW'}) vs {playerB_ds} ({'FOUND' if b_in else 'NEW'})")
+            print(
+                f"[DEBUG] DS  : {playerA_ds} ({'FOUND' if playerA_known else 'NEW'}) "
+                f"vs {playerB_ds} ({'FOUND' if playerB_known else 'NEW'})"
+            )
+
+        if not (playerA_known and playerB_known):
+            return {
+                "playerA": playerA_raw,
+                "playerB": playerB_raw,
+                "playerA_ds": playerA_ds,
+                "playerB_ds": playerB_ds,
+                "prob_A_win": 0.5,
+                "raw_prob_A_win": 0.5,
+                "oddsA": float(oddsA),
+                "oddsB": float(oddsB),
+                "decision": "SKIP_UNKNOWN_PLAYERS",
+                "reason": "player_not_in_warmup_state",
+                "stake": 0.0,
+                "pick": None,
+                "pick_odds": None,
+                "pick_edge": 0.0,
+                "edgeA": 0.0,
+                "edgeB": 0.0,
+                "meta": {
+                    "surface": surface,
+                    "level": float(level),
+                    "round": float(rnd),
+                    "best_of": float(best_of),
+                    "indoor": float(indoor),
+                    "date": date_iso,
+                    "playerA_known": bool(playerA_known),
+                    "playerB_known": bool(playerB_known),
+                },
+            }
 
         # 1) base features from state (dataset names)
         feats = self.engine.build_features(
