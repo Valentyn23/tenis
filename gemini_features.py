@@ -240,6 +240,56 @@ def get_gemini_features(player_name):
     return data
 
 
+def get_pick_opinion(payload: dict) -> dict:
+    """Secondary Gemini opinion for an already-produced model pick.
+
+    Returns dict with:
+      {"stance": "agree|neutral|disagree", "confidence": 0..1, "short_reason": str}
+    """
+    neutral_resp = {"stance": "neutral", "confidence": 0.5, "short_reason": "Gemini unavailable"}
+    if not GEMINI_API_KEY:
+        return neutral_resp
+
+    prompt = f"""
+You are a tennis betting assistant. Evaluate the model pick below as a SECONDARY opinion.
+
+Return ONLY JSON:
+{{
+  "stance": "agree" | "neutral" | "disagree",
+  "confidence": number 0..1,
+  "short_reason": "max 180 chars"
+}}
+
+Model pick context:
+{json.dumps(payload, ensure_ascii=False)}
+
+Rules:
+- Keep short_reason concise.
+- If context is weak/unclear, return neutral with confidence around 0.5.
+- No extra text, only JSON.
+"""
+
+    text = ask_gemini(prompt)
+    data = parse_json(text)
+    if not isinstance(data, dict):
+        return neutral_resp
+
+    stance = str(data.get("stance", "neutral")).strip().lower()
+    if stance not in {"agree", "neutral", "disagree"}:
+        stance = "neutral"
+
+    try:
+        confidence = max(0.0, min(1.0, float(data.get("confidence", 0.5))))
+    except Exception:
+        confidence = 0.5
+
+    reason = str(data.get("short_reason", "")).strip() or "No extra context"
+    if len(reason) > 180:
+        reason = reason[:177] + "..."
+
+    return {"stance": stance, "confidence": confidence, "short_reason": reason}
+
+
 # =========================================================
 # TEST
 # =========================================================
