@@ -1,5 +1,6 @@
 # app.py
 import os
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -25,28 +26,33 @@ KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.35"))
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.03"))
 
 
-def make_predictor(mode: str) -> Predictor:
+def make_predictor(mode: str) -> Optional[Predictor]:
     state_path = os.getenv(f"STATE_PATH_{mode}", f"state/engine_state_{mode.lower()}.pkl")
-    return Predictor(
-        model_path=f"model/{mode.lower()}_model.pkl",
-        state_path=state_path,
-        bankroll=BANKROLL,
-        max_stake_pct=MAX_STAKE_PCT,
-        kelly_fraction_used=KELLY_FRACTION,
-        min_edge=MIN_EDGE,
-        prob_floor=float(os.getenv("PROB_FLOOR", "0.08")),
-        prob_ceil=float(os.getenv("PROB_CEIL", "0.92")),
-        max_overround=float(os.getenv("MAX_OVERROUND", "1.06")),
-        strict_mode_match=(os.getenv("STRICT_MODE_MATCH", "1") == "1"),
-    )
+    try:
+        return Predictor(
+            model_path=f"model/{mode.lower()}_model.pkl",
+            state_path=state_path,
+            bankroll=BANKROLL,
+            max_stake_pct=MAX_STAKE_PCT,
+            kelly_fraction_used=KELLY_FRACTION,
+            min_edge=MIN_EDGE,
+            prob_floor=float(os.getenv("PROB_FLOOR", "0.08")),
+            prob_ceil=float(os.getenv("PROB_CEIL", "0.92")),
+            max_overround=float(os.getenv("MAX_OVERROUND", "1.06")),
+            strict_mode_match=(os.getenv("STRICT_MODE_MATCH", "1") == "1"),
+        )
+    except RuntimeError as exc:
+        print(f"[WARN] Predictor {mode} unavailable: {exc}")
+        print(
+            f"[WARN] Create state for {mode}: MODE={mode} python wrump.py "
+            f"(or set STATE_PATH_{mode})"
+        )
+        return None
 
 
 def main():
-    # Two predictors for mixed ATP/WTA feed
-    predictors = {
-        "ATP": make_predictor("ATP"),
-        "WTA": make_predictor("WTA"),
-    }
+    # Predictors are loaded lazily and may be unavailable if state file is missing
+    predictors = {}
 
     # 1) Находим теннисные sport keys
     sports = list_active_tennis_sports()
@@ -54,6 +60,14 @@ def main():
 
     tennis_keys = [s["key"] for s in sports if "tennis" in (s.get("key", "").lower())]
     print("Tennis keys:", tennis_keys[:10])
+
+    required_modes = {
+        m for m in (infer_mode_from_sport_key(k) for k in tennis_keys) if m in ("ATP", "WTA")
+    }
+    for mode in sorted(required_modes):
+        pred = make_predictor(mode)
+        if pred is not None:
+            predictors[mode] = pred
 
     # 2) Тянем odds по каждому sport_key и собираем события
     events = []
@@ -69,6 +83,10 @@ def main():
 
     events = events[:MAX_EVENTS]
     print(f"Loaded events with odds: {len(events)}")
+
+    if not predictors:
+        print("No predictors available. Warm up states and retry.")
+        return
 
     # 3) Прогнозируем и печатаем рекомендации
     picks = []

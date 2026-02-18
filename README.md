@@ -17,6 +17,10 @@ By default warmup saves to:
 - `STATE_PATH_ATP`
 - `STATE_PATH_WTA`
 
+
+If one tour state is missing, `app.py` now prints a warning and continues with available tour predictors.
+To enable both tours, warm up both states first.
+
 Enable strict mode consistency check (recommended, default on):
 
 ```bash
