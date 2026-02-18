@@ -13,8 +13,8 @@ from config_shared import normalize_mode, tournament_level_from_text
 # =========================================================
 DATA_FOLDER = "data"
 EXTENSIONS = ("*.xlsx", "*.xls", "*.csv")
-STATE_PATH = "state/engine_state.pkl"
 MODE = normalize_mode(os.getenv("MODE", "ATP"))
+STATE_PATH = os.getenv("STATE_PATH", f"state/engine_state_{MODE.lower()}.pkl")
 
 
 # =========================================================
@@ -285,6 +285,7 @@ def warmup_engine():
 # =========================================================
 if __name__ == "__main__":
     print(f"Warmup MODE: {MODE}")
+    print(f"Warmup STATE_PATH: {STATE_PATH}")
     engine = warmup_engine()
 
     print("\nExample player states:")

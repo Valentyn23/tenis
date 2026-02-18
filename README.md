@@ -1,8 +1,31 @@
 # tenis
 
+## Runtime notes
+
+For mixed ATP/WTA inference, use **separate warmed states**:
+
+```bash
+MODE=ATP python wrump.py
+MODE=WTA python wrump.py
+```
+
+By default warmup saves to:
+- `state/engine_state_atp.pkl`
+- `state/engine_state_wta.pkl`
+
+`app.py` loads them automatically for each tour, but you can override:
+- `STATE_PATH_ATP`
+- `STATE_PATH_WTA`
+
+Enable strict mode consistency check (recommended, default on):
+
+```bash
+STRICT_MODE_MATCH=1 python app.py
+```
+
 ## Bankroll calculator
 
-Added interactive script `bankroll.py` to calculate recommended stake for a single outcome.
+Interactive script `bankroll.py` calculates recommended stake for a single outcome.
 
 Run:
 

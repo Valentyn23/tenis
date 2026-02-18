@@ -113,6 +113,9 @@ class Predictor:
         min_odds_allowed: float = 1.15,       # skip ultra-favorites (often bad liquidity)
         max_odds_allowed: float = 12.0,       # skip extreme underdogs (often bad lines)
         max_overround: float = 1.08,          # skip over-vig markets
+        strict_mode_match: bool = False,      # fail if engine/model mode mismatch
+        soft_cap_edge: float = 0.25,          # additional dampener above this edge
+        soft_cap_factor: float = 0.60,
     ):
         self.debug = bool(debug)
 
@@ -121,6 +124,9 @@ class Predictor:
         self.min_odds_allowed = float(min_odds_allowed)
         self.max_odds_allowed = float(max_odds_allowed)
         self.max_overround = float(max_overround)
+        self.strict_mode_match = bool(strict_mode_match)
+        self.soft_cap_edge = float(soft_cap_edge)
+        self.soft_cap_factor = float(soft_cap_factor)
 
         # ---- load model bundle ----
         bundle = joblib.load(model_path)
@@ -165,6 +171,12 @@ class Predictor:
             f"engine_mode: {engine_mode} | model_mode: {self.model_mode}"
         )
         print(f"Gemini features enabled by model schema: {self.use_gemini_features}")
+
+        if self.strict_mode_match and engine_mode != self.model_mode:
+            raise RuntimeError(
+                f"Mode mismatch: engine_mode={engine_mode}, model_mode={self.model_mode}. "
+                f"Use a matching state_path for this model."
+            )
 
     def _build_surname_initial_lookup(self) -> Dict[tuple[str, str], Optional[str]]:
         lookup: Dict[tuple[str, str], Optional[str]] = {}
@@ -365,6 +377,11 @@ class Predictor:
 
         stakeA = self.bankroll * clamp(fA, 0.0, self.max_stake_pct)
         stakeB = self.bankroll * clamp(fB, 0.0, self.max_stake_pct)
+
+        if abs(edgeA) > self.soft_cap_edge:
+            stakeA *= self.soft_cap_factor
+        if abs(edgeB) > self.soft_cap_edge:
+            stakeB *= self.soft_cap_factor
 
         decision = "NO_BET"
         pick = None
