@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from odds_theoddsapi import list_active_tennis_sports, fetch_h2h_odds_for_sport, best_decimal_odds_from_event
-from predictor import Predictor
+from predictor import Predictor, to_dataset_name
 
 MODE = os.getenv("MODE", "ATP")  # ATP/WTA (для модели)
 MODEL_PATH = f"model/{MODE.lower()}_model.pkl"
@@ -63,12 +63,18 @@ def main():
 
     # 3) Прогнозируем и печатаем рекомендации
     picks = []
+    known_players = 0
+    total_players = 0
     for ev in events:
         A = ev["playerA"]
         B = ev["playerB"]
         oddsA = ev["oddsA"]
         oddsB = ev["oddsB"]
         dt = (ev.get("commence_time") or "")[:10] or None
+
+        total_players += 2
+        known_players += int(to_dataset_name(A) in pred.engine.players)
+        known_players += int(to_dataset_name(B) in pred.engine.players)
 
         out = pred.predict_event(
             playerA=A,
@@ -86,6 +92,9 @@ def main():
 
     picks = [x for x in picks if x.get("decision") != "SKIP_MARKET"]
     picks.sort(key=lambda x: (x.get("pick_edge") or 0.0), reverse=True)
+
+    if total_players:
+        print(f"Known players in warmed state: {known_players}/{total_players} ({100.0 * known_players / total_players:.1f}%)")
 
     print("\n=== TOP RECOMMENDATIONS ===")
     for p in picks[:25]:

@@ -138,7 +138,12 @@ class Predictor:
             )
 
         self.engine = eng
-        print(f"Loaded StateEngine from {state_path} | players: {len(self.engine.players)}")
+        total_player_matches = sum(st.matches for st in self.engine.players.values())
+        inferred_matches = total_player_matches / 2.0
+        print(
+            f"Loaded StateEngine from {state_path} | "
+            f"players: {len(self.engine.players)} | inferred_matches: {inferred_matches:.0f}"
+        )
 
     # -----------------------------------------------------
     # GEMINI FEATURES (raw names)

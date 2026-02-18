@@ -244,6 +244,18 @@ def build_match_history():
         raise RuntimeError("No matches parsed from datasets (all files resulted in 0).")
 
     all_matches.sort(key=lambda x: x["date"])
+
+    unique_players = {
+        p
+        for m in all_matches
+        for p in (m["winner"], m["loser"])
+    }
+    print("\n=== DATASET SUMMARY ===")
+    print(f"Matches parsed: {len(all_matches)}")
+    print(f"Unique players: {len(unique_players)}")
+    if unique_players:
+        print(f"Avg matches per player: {(2.0 * len(all_matches)) / len(unique_players):.2f}")
+
     return all_matches
 
 
@@ -270,6 +282,11 @@ def warmup_engine():
             print("Processed", i)
 
     print("Warmup complete.")
+    total_player_matches = sum(st.matches for st in engine.players.values())
+    # each match increments counter for both winner and loser
+    inferred_matches = total_player_matches / 2.0
+    print(f"Engine players: {len(engine.players)}")
+    print(f"Engine inferred matches: {inferred_matches:.0f}")
     return engine
 
 
