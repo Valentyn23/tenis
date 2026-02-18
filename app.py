@@ -1,45 +1,44 @@
 # app.py
+from __future__ import annotations
+
+import json
 import os
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover - runtime guard
+    def load_dotenv():
+        return None
 
 load_dotenv()
 
 from odds_theoddsapi import list_active_tennis_sports, fetch_h2h_odds_for_sport, best_decimal_odds_from_event
 from predictor import Predictor
 from config_shared import infer_level_from_sport_key, infer_mode_from_sport_key
+from settings import load_runtime_settings
 
-# Можешь менять:
-REGIONS = os.getenv("ODDS_REGIONS", "eu")  # us/uk/eu/au
-MAX_EVENTS = int(os.getenv("MAX_EVENTS", "30"))
-
-# Дефолты метаданных, если odds API их не даёт (улучшим позже вторым API)
-DEFAULT_SURFACE = os.getenv("DEFAULT_SURFACE", "Hard")
-DEFAULT_LEVEL = float(os.getenv("DEFAULT_LEVEL", "1"))
-DEFAULT_ROUND = float(os.getenv("DEFAULT_ROUND", "1"))
-DEFAULT_BEST_OF = float(os.getenv("DEFAULT_BEST_OF", "3"))
-DEFAULT_INDOOR = float(os.getenv("DEFAULT_INDOOR", "0"))
-
-BANKROLL = float(os.getenv("BANKROLL", "1000"))
-MAX_STAKE_PCT = float(os.getenv("MAX_STAKE_PCT", "0.02"))
-KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.35"))
-MIN_EDGE = float(os.getenv("MIN_EDGE", "0.03"))
+SETTINGS = load_runtime_settings()
 
 
 def make_predictor(mode: str) -> Optional[Predictor]:
-    state_path = os.getenv(f"STATE_PATH_{mode}", f"state/engine_state_{mode.lower()}.pkl")
+    state_path = SETTINGS.state_path_atp if mode == "ATP" else SETTINGS.state_path_wta
     try:
         return Predictor(
             model_path=f"model/{mode.lower()}_model.pkl",
             state_path=state_path,
-            bankroll=BANKROLL,
-            max_stake_pct=MAX_STAKE_PCT,
-            kelly_fraction_used=KELLY_FRACTION,
-            min_edge=MIN_EDGE,
-            prob_floor=float(os.getenv("PROB_FLOOR", "0.08")),
-            prob_ceil=float(os.getenv("PROB_CEIL", "0.92")),
-            max_overround=float(os.getenv("MAX_OVERROUND", "1.06")),
-            strict_mode_match=(os.getenv("STRICT_MODE_MATCH", "1") == "1"),
+            bankroll=SETTINGS.bankroll,
+            max_stake_pct=SETTINGS.max_stake_pct,
+            kelly_fraction_used=SETTINGS.kelly_fraction,
+            min_edge=SETTINGS.min_edge,
+            prob_floor=SETTINGS.prob_floor,
+            prob_ceil=SETTINGS.prob_ceil,
+            max_overround=SETTINGS.max_overround,
+            strict_mode_match=SETTINGS.strict_mode_match,
+            soft_cap_edge=SETTINGS.soft_cap_edge,
+            soft_cap_factor=SETTINGS.soft_cap_factor,
         )
     except RuntimeError as exc:
         print(f"[WARN] Predictor {mode} unavailable: {exc}")
@@ -50,30 +49,55 @@ def make_predictor(mode: str) -> Optional[Predictor]:
         return None
 
 
-def main():
-    # Predictors are loaded lazily and may be unavailable if state file is missing
-    predictors = {}
+def validate_artifacts(required_modes: set[str]) -> dict[str, str]:
+    status = {}
+    for mode in sorted(required_modes):
+        model_path = Path(f"model/{mode.lower()}_model.pkl")
+        state_path = Path(SETTINGS.state_path_atp if mode == "ATP" else SETTINGS.state_path_wta)
+        if not model_path.exists():
+            status[mode] = f"MISSING_MODEL:{model_path}"
+            continue
+        if not state_path.exists():
+            status[mode] = f"MISSING_STATE:{state_path}"
+            continue
+        status[mode] = "OK"
+    return status
 
-    # 1) Находим теннисные sport keys
+
+def save_session_report(report: dict) -> Optional[Path]:
+    if not SETTINGS.save_report:
+        return None
+    report_dir = Path(SETTINGS.report_dir)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    path = report_dir / f"session_{ts}.json"
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2))
+    return path
+
+
+def main():
+    print(f"Runtime settings: {SETTINGS.summary()}")
+
     sports = list_active_tennis_sports()
     print(f"Found active tennis sports: {len(sports)}")
 
     tennis_keys = [s["key"] for s in sports if "tennis" in (s.get("key", "").lower())]
     print("Tennis keys:", tennis_keys[:10])
 
-    required_modes = {
-        m for m in (infer_mode_from_sport_key(k) for k in tennis_keys) if m in ("ATP", "WTA")
-    }
+    required_modes = {m for m in (infer_mode_from_sport_key(k) for k in tennis_keys) if m in ("ATP", "WTA")}
+    preflight = validate_artifacts(required_modes)
+    print("Preflight:", preflight)
+
+    predictors = {}
     for mode in sorted(required_modes):
         pred = make_predictor(mode)
         if pred is not None:
             predictors[mode] = pred
 
-    # 2) Тянем odds по каждому sport_key и собираем события
     events = []
     for k in tennis_keys[:8]:
         try:
-            data = fetch_h2h_odds_for_sport(k, regions=REGIONS, odds_format="decimal")
+            data = fetch_h2h_odds_for_sport(k, regions=SETTINGS.regions, odds_format="decimal")
             for e in data:
                 best = best_decimal_odds_from_event(e)
                 if best:
@@ -81,14 +105,13 @@ def main():
         except Exception as ex:
             print("Odds error for", k, ex)
 
-    events = events[:MAX_EVENTS]
+    events = events[: SETTINGS.max_events]
     print(f"Loaded events with odds: {len(events)}")
 
     if not predictors:
         print("No predictors available. Warm up states and retry.")
         return
 
-    # 3) Прогнозируем и печатаем рекомендации
     picks = []
     known_players = 0
     total_players = 0
@@ -96,7 +119,7 @@ def main():
     skipped_unknown_tour = 0
     used_by_mode = {"ATP": 0, "WTA": 0}
     decision_counts = {"BET_A": 0, "BET_B": 0, "NO_BET": 0, "SKIP_MARKET": 0, "SKIP_UNKNOWN_PLAYERS": 0}
-    market_skip_reasons = {}
+    market_skip_reasons: dict[str, int] = {}
     cap_stake_hits = 0
 
     for ev in events:
@@ -120,7 +143,7 @@ def main():
         known_players += int(a_known)
         known_players += int(b_known)
 
-        level_for_event, used_level_fallback = infer_level_from_sport_key(ev.get("sport_key"), default=DEFAULT_LEVEL)
+        level_for_event, used_level_fallback = infer_level_from_sport_key(ev.get("sport_key"), default=SETTINGS.default_level)
         fallback_level_count += int(used_level_fallback)
 
         out = pred.predict_event(
@@ -128,11 +151,11 @@ def main():
             playerB=B,
             oddsA=oddsA,
             oddsB=oddsB,
-            surface=DEFAULT_SURFACE,
+            surface=SETTINGS.default_surface,
             level=level_for_event,
-            rnd=DEFAULT_ROUND,
-            best_of=DEFAULT_BEST_OF,
-            indoor=DEFAULT_INDOOR,
+            rnd=SETTINGS.default_round,
+            best_of=SETTINGS.default_best_of,
+            indoor=SETTINGS.default_indoor,
             date_iso=dt,
         )
         out["tour_mode"] = event_mode
@@ -145,13 +168,13 @@ def main():
             reason = out.get("reason", "unknown")
             market_skip_reasons[reason] = market_skip_reasons.get(reason, 0) + 1
 
-        if dec in ("BET_A", "BET_B") and float(out.get("stake", 0.0)) >= (BANKROLL * MAX_STAKE_PCT - 1e-9):
+        if dec in ("BET_A", "BET_B") and float(out.get("stake", 0.0)) >= (SETTINGS.bankroll * SETTINGS.max_stake_pct - 1e-9):
             cap_stake_hits += 1
 
         picks.append(out)
 
-    picks = [x for x in picks if x.get("decision") != "SKIP_MARKET"]
-    picks.sort(key=lambda x: (x.get("pick_edge") or 0.0), reverse=True)
+    picks_no_market_skip = [x for x in picks if x.get("decision") != "SKIP_MARKET"]
+    picks_no_market_skip.sort(key=lambda x: (x.get("pick_edge") or 0.0), reverse=True)
 
     processed_events = max(1, sum(used_by_mode.values()))
     print(f"Predictors used by tour: ATP={used_by_mode['ATP']} WTA={used_by_mode['WTA']}")
@@ -179,8 +202,26 @@ def main():
     if bet_count:
         print(f"Cap stake hits: {cap_stake_hits}/{bet_count}")
 
+    report = {
+        "timestamp_utc": datetime.utcnow().isoformat(),
+        "settings": SETTINGS.summary(),
+        "preflight": preflight,
+        "events_loaded": len(events),
+        "used_by_mode": used_by_mode,
+        "skipped_unknown_tour": skipped_unknown_tour,
+        "known_players_ratio": (known_players / total_players) if total_players else None,
+        "fallback_level_ratio": (fallback_level_count / processed_events) if processed_events else None,
+        "decision_counts": decision_counts,
+        "market_skip_reasons": market_skip_reasons,
+        "cap_stake_hits": cap_stake_hits,
+        "bet_count": bet_count,
+    }
+    report_path = save_session_report(report)
+    if report_path:
+        print(f"Session report saved to: {report_path}")
+
     print("\n=== TOP RECOMMENDATIONS ===")
-    for p in picks[:25]:
+    for p in picks_no_market_skip[: SETTINGS.print_top_n]:
         A = p["playerA"]
         B = p["playerB"]
         dec = p["decision"]

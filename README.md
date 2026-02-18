@@ -1,37 +1,93 @@
 # tenis
 
-## Runtime notes
+Tennis betting helper pipeline:
+- warm up rating/state from historical ATP/WTA datasets,
+- fetch current odds,
+- run tour-specific model inference,
+- produce risk-controlled stake recommendations.
 
-For mixed ATP/WTA inference, use **separate warmed states**:
+## Requirements
+
+Recommended Python: `3.10+`
+
+Install dependencies in your venv:
+
+```bash
+pip install -U pip
+pip install pandas openpyxl xgboost scikit-learn joblib requests python-dotenv pytest
+```
+
+## Quick start
+
+### 1) Warm up ATP and WTA states separately
 
 ```bash
 MODE=ATP python wrump.py
 MODE=WTA python wrump.py
 ```
 
-By default warmup saves to:
+By default this creates:
 - `state/engine_state_atp.pkl`
 - `state/engine_state_wta.pkl`
 
-`app.py` loads them automatically for each tour, but you can override:
-- `STATE_PATH_ATP`
-- `STATE_PATH_WTA`
-
-
-If one tour state is missing, `app.py` now prints a warning and continues with available tour predictors.
-To enable both tours, warm up both states first.
-
-Enable strict mode consistency check (recommended, default on):
+### 2) Run app
 
 ```bash
 STRICT_MODE_MATCH=1 python app.py
 ```
 
+## Runtime configuration (env)
+
+Core:
+- `ODDS_REGIONS` (default `eu`)
+- `MAX_EVENTS` (default `30`)
+- `STRICT_MODE_MATCH` (default `1`)
+
+State paths:
+- `STATE_PATH_ATP` (default `state/engine_state_atp.pkl`)
+- `STATE_PATH_WTA` (default `state/engine_state_wta.pkl`)
+
+Risk profile:
+- `RISK_PROFILE`: `conservative` / `balanced` / `aggressive` (default `balanced`)
+- overrides: `MAX_STAKE_PCT`, `KELLY_FRACTION`, `MIN_EDGE`, `PROB_FLOOR`, `PROB_CEIL`, `MAX_OVERROUND`, `SOFT_CAP_EDGE`, `SOFT_CAP_FACTOR`
+
+Reports:
+- `SAVE_REPORT` (default `1`)
+- `REPORT_DIR` (default `reports`)
+- `PRINT_TOP_N` (default `25`)
+
+## Typical troubleshooting
+
+### WTA/ATP predictor unavailable
+
+If you see:
+- `Predictor WTA unavailable ... Missing: state/engine_state_wta.pkl`
+
+Run warmup for that tour:
+
+```bash
+MODE=WTA python wrump.py
+```
+
+### Mode mismatch (strict mode)
+
+If `engine_mode != model_mode`, app stops in strict mode.
+Use matching state/model files or set (not recommended):
+
+```bash
+STRICT_MODE_MATCH=0
+```
+
+### Too many `SKIP_MARKET`
+
+Check:
+- odds range filters,
+- overround (`MAX_OVERROUND`),
+- whether odds feed quality is low.
+
 ## Bankroll calculator
 
-Interactive script `bankroll.py` calculates recommended stake for a single outcome.
-
-Run:
+Interactive utility for one-off stake sizing:
 
 ```bash
 python bankroll.py
@@ -40,14 +96,20 @@ python bankroll.py
 Inputs:
 - bankroll
 - decimal odds
-- your estimated probability for the selected outcome (`0..1`)
-- Kelly fraction (default `0.5`)
-- max stake cap as percent of bankroll (default `0.03`)
-- minimum edge threshold (default `0.015`)
+- your estimated probability (`0..1`)
+- Kelly fraction
+- max stake cap
+- minimum edge threshold
 
-Output:
-- market implied probability
+Outputs:
+- implied probability
 - edge
 - Kelly fractions
-- recommended stake amount
-- `BET` / `NO_BET` decision
+- recommended stake
+- `BET` / `NO_BET`
+
+## Tests
+
+```bash
+pytest -q
+```

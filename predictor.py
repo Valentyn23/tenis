@@ -116,6 +116,7 @@ class Predictor:
         strict_mode_match: bool = False,      # fail if engine/model mode mismatch
         soft_cap_edge: float = 0.25,          # additional dampener above this edge
         soft_cap_factor: float = 0.60,
+        clamp_guard_band: float = 0.02,
     ):
         self.debug = bool(debug)
 
@@ -127,6 +128,7 @@ class Predictor:
         self.strict_mode_match = bool(strict_mode_match)
         self.soft_cap_edge = float(soft_cap_edge)
         self.soft_cap_factor = float(soft_cap_factor)
+        self.clamp_guard_band = float(clamp_guard_band)
 
         # ---- load model bundle ----
         bundle = joblib.load(model_path)
@@ -372,6 +374,9 @@ class Predictor:
         edgeA = pA - market_pA
         edgeB = (1.0 - pA) - market_pB
 
+        near_floor = pA <= (self.prob_floor + self.clamp_guard_band)
+        near_ceil = pA >= (self.prob_ceil - self.clamp_guard_band)
+
         fA = kelly_fraction(pA, float(oddsA)) * self.kelly_fraction_used
         fB = kelly_fraction(1.0 - pA, float(oddsB)) * self.kelly_fraction_used
 
@@ -384,19 +389,22 @@ class Predictor:
             stakeB *= self.soft_cap_factor
 
         decision = "NO_BET"
+        reason = None
         pick = None
         pick_odds = None
         pick_edge = 0.0
         stake = 0.0
 
-        if edgeA >= self.min_edge and stakeA > 0:
+        if near_floor or near_ceil:
+            reason = "edge_near_clamp"
+        elif edgeA >= self.min_edge and stakeA > 0:
             decision = "BET_A"
             pick = playerA_raw
             pick_odds = float(oddsA)
             pick_edge = float(edgeA)
             stake = float(stakeA)
 
-        if edgeB >= self.min_edge and stakeB > 0 and edgeB > pick_edge:
+        if reason is None and edgeB >= self.min_edge and stakeB > 0 and edgeB > pick_edge:
             decision = "BET_B"
             pick = playerB_raw
             pick_odds = float(oddsB)
@@ -417,6 +425,7 @@ class Predictor:
             "edgeA": float(edgeA),
             "edgeB": float(edgeB),
             "decision": decision,
+            "reason": reason,
             "pick": pick,
             "stake": round(stake, 2),
             "pick_odds": pick_odds,
