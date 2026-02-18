@@ -37,6 +37,7 @@ class RuntimeSettings:
     print_top_n: int
 
     gemini_pick_opinion: bool
+    use_calibration: bool
 
     risk_profile: str
 
@@ -47,6 +48,7 @@ class RuntimeSettings:
             f"risk_profile={self.risk_profile} min_edge={self.min_edge} max_stake_pct={self.max_stake_pct} "
             f"kelly_fraction={self.kelly_fraction} prob=[{self.prob_floor},{self.prob_ceil}] "
             f"max_overround={self.max_overround} strict_mode_match={self.strict_mode_match}"
+            f" use_calibration={self.use_calibration}"
         )
 
 
@@ -121,5 +123,6 @@ def load_runtime_settings() -> RuntimeSettings:
         bets_ledger_path=os.getenv("BETS_LEDGER_PATH", "bets/ledger.csv"),
         print_top_n=int(os.getenv("PRINT_TOP_N", "25")),
         gemini_pick_opinion=_env_bool("GEMINI_PICK_OPINION", False),
+        use_calibration=_env_bool("USE_CALIBRATION", True),
         risk_profile=profile,
     )

@@ -14,7 +14,7 @@ Install dependencies in your venv:
 
 ```bash
 pip install -U pip
-pip install pandas openpyxl xgboost scikit-learn joblib requests python-dotenv pytest
+pip install pandas openpyxl xgboost scikit-learn joblib requests python-dotenv pytest streamlit
 ```
 
 ## Quick start
@@ -62,6 +62,23 @@ Money / ledger:
 
 Gemini:
 - `GEMINI_PICK_OPINION` (default `0`) — ask Gemini for secondary opinion on each BET pick
+
+
+## Streamlit UI (MVP)
+
+Launch visual UI:
+
+```bash
+streamlit run ui_app.py
+```
+
+UI includes:
+- settings panel (bankroll, risk profile, max events, calibration toggle),
+- one-click run button,
+- recommendations table with color highlights (green = BET, red = NO_BET/SKIP),
+- Gemini secondary opinion columns,
+- ledger tab reading `bets/ledger.csv`,
+- basic charts for decisions, stakes, and edges.
 
 ## Typical troubleshooting
 
