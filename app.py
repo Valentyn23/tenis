@@ -51,6 +51,7 @@ def make_predictor(mode: str) -> Optional[Predictor]:
             strict_mode_match=SETTINGS.strict_mode_match,
             soft_cap_edge=SETTINGS.soft_cap_edge,
             soft_cap_factor=SETTINGS.soft_cap_factor,
+            use_calibration=SETTINGS.use_calibration,
         )
     except RuntimeError as exc:
         print(f"[WARN] Predictor {mode} unavailable: {exc}")
