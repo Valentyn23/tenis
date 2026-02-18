@@ -87,6 +87,15 @@ def clamp(x: float, lo: float, hi: float) -> float:
 # =========================================================
 # PREDICTOR
 # =========================================================
+
+GEMINI_FEATURE_COLUMNS = {
+    "injury_diff",
+    "mental_diff",
+    "motivation_diff",
+    "fatigue_news_diff",
+    "confidence_diff",
+}
+
 class Predictor:
     def __init__(
         self,
@@ -122,6 +131,7 @@ class Predictor:
         self.model = bundle["model"]
         self.cal = bundle["calibrator"]
         self.feature_names = bundle.get("feature_names", None)
+        self.model_mode = str(bundle.get("mode", "ATP")).upper()
 
         # ---- bankroll / staking ----
         self.bankroll = float(bankroll)
@@ -142,12 +152,17 @@ class Predictor:
         self._known_players = set(self.engine.players.keys())
         self._exact_name_lookup = {p.lower(): p for p in self._known_players}
         self._surname_initial_lookup = self._build_surname_initial_lookup()
+        feature_set = set(self.feature_names or [])
+        self.use_gemini_features = bool(feature_set.intersection(GEMINI_FEATURE_COLUMNS))
         total_player_matches = sum(st.matches for st in self.engine.players.values())
         inferred_matches = total_player_matches / 2.0
+        engine_mode = str(getattr(self.engine, "mode", "ATP")).upper()
         print(
             f"Loaded StateEngine from {state_path} | "
-            f"players: {len(self.engine.players)} | inferred_matches: {inferred_matches:.0f}"
+            f"players: {len(self.engine.players)} | inferred_matches: {inferred_matches:.0f} | "
+            f"engine_mode: {engine_mode} | model_mode: {self.model_mode}"
         )
+        print(f"Gemini features enabled by model schema: {self.use_gemini_features}")
 
     def _build_surname_initial_lookup(self) -> Dict[tuple[str, str], Optional[str]]:
         lookup: Dict[tuple[str, str], Optional[str]] = {}
@@ -288,8 +303,9 @@ class Predictor:
             date=date_iso,
         )
 
-        # 2) Gemini ALWAYS ON (raw names)
-        self._add_gemini_diff(feats, playerA_raw, playerB_raw)
+        # 2) Gemini features only if model schema includes them
+        if self.use_gemini_features:
+            self._add_gemini_diff(feats, playerA_raw, playerB_raw)
 
         # 3) align columns
         cols = self.feature_names or sorted(feats.keys())

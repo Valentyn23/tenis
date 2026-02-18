@@ -5,8 +5,9 @@ load_dotenv()
 
 from odds_theoddsapi import list_active_tennis_sports, fetch_h2h_odds_for_sport, best_decimal_odds_from_event
 from predictor import Predictor
+from config_shared import normalize_mode, infer_level_from_sport_key
 
-MODE = os.getenv("MODE", "ATP")  # ATP/WTA (для модели)
+MODE = normalize_mode(os.getenv("MODE", "ATP"))  # ATP/WTA (для модели)
 MODEL_PATH = f"model/{MODE.lower()}_model.pkl"
 
 # Можешь менять:
@@ -65,6 +66,7 @@ def main():
     picks = []
     known_players = 0
     total_players = 0
+    fallback_level_count = 0
     for ev in events:
         A = ev["playerA"]
         B = ev["playerB"]
@@ -78,13 +80,16 @@ def main():
         known_players += int(a_known)
         known_players += int(b_known)
 
+        level_for_event, used_level_fallback = infer_level_from_sport_key(ev.get("sport_key"), default=DEFAULT_LEVEL)
+        fallback_level_count += int(used_level_fallback)
+
         out = pred.predict_event(
             playerA=A,
             playerB=B,
             oddsA=oddsA,
             oddsB=oddsB,
             surface=DEFAULT_SURFACE,
-            level=DEFAULT_LEVEL,
+            level=level_for_event,
             rnd=DEFAULT_ROUND,
             best_of=DEFAULT_BEST_OF,
             indoor=DEFAULT_INDOOR,
@@ -97,6 +102,9 @@ def main():
 
     if total_players:
         print(f"Known players in warmed state: {known_players}/{total_players} ({100.0 * known_players / total_players:.1f}%)")
+
+    if events:
+        print(f"Fallback tournament level used: {fallback_level_count}/{len(events)}")
 
     print("\n=== TOP RECOMMENDATIONS ===")
     for p in picks[:25]:
