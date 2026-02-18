@@ -108,10 +108,11 @@ class Predictor:
         debug: bool = False,
 
         # --- safety controls ---
-        prob_floor: float = 0.03,             # avoid 0.001/0.999 extremes
-        prob_ceil: float = 0.97,
-        min_odds_allowed: float = 1.10,       # skip ultra-favorites (often bad liquidity)
-        max_odds_allowed: float = 15.0,       # skip extreme underdogs (often bad lines)
+        prob_floor: float = 0.05,             # avoid 0.001/0.999 extremes
+        prob_ceil: float = 0.95,
+        min_odds_allowed: float = 1.15,       # skip ultra-favorites (often bad liquidity)
+        max_odds_allowed: float = 12.0,       # skip extreme underdogs (often bad lines)
+        max_overround: float = 1.08,          # skip over-vig markets
     ):
         self.debug = bool(debug)
 
@@ -119,6 +120,7 @@ class Predictor:
         self.prob_ceil = float(prob_ceil)
         self.min_odds_allowed = float(min_odds_allowed)
         self.max_odds_allowed = float(max_odds_allowed)
+        self.max_overround = float(max_overround)
 
         # ---- load model bundle ----
         bundle = joblib.load(model_path)
@@ -219,14 +221,19 @@ class Predictor:
     # -----------------------------------------------------
     # MARKET SANITY
     # -----------------------------------------------------
-    def _is_bad_market(self, oddsA: float, oddsB: float) -> bool:
+    def _is_bad_market(self, oddsA: float, oddsB: float) -> tuple[bool, str]:
         lo = min(float(oddsA), float(oddsB))
         hi = max(float(oddsA), float(oddsB))
         if lo < self.min_odds_allowed:
-            return True
+            return True, "bad_odds_range"
         if hi > self.max_odds_allowed:
-            return True
-        return False
+            return True, "bad_odds_range"
+
+        overround = implied_prob(float(oddsA)) + implied_prob(float(oddsB))
+        if overround > self.max_overround:
+            return True, "high_overround"
+
+        return False, "ok"
 
     # -----------------------------------------------------
     # CORE PREDICT
@@ -319,7 +326,8 @@ class Predictor:
         pA = clamp(pA, self.prob_floor, self.prob_ceil)
 
         # 5) market sanity skip (important!)
-        if self._is_bad_market(float(oddsA), float(oddsB)):
+        bad_market, market_reason = self._is_bad_market(float(oddsA), float(oddsB))
+        if bad_market:
             return {
                 "playerA": playerA_raw,
                 "playerB": playerB_raw,
@@ -330,7 +338,7 @@ class Predictor:
                 "oddsA": float(oddsA),
                 "oddsB": float(oddsB),
                 "decision": "SKIP_MARKET",
-                "reason": "bad_odds_range",
+                "reason": market_reason,
                 "stake": 0.0,
                 "pick": None,
                 "pick_odds": None,

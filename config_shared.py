@@ -41,13 +41,22 @@ def tournament_level_from_text(text: Optional[str], default: float = 1.0) -> flo
     return float(default)
 
 
+def infer_mode_from_sport_key(sport_key: Optional[str]) -> Optional[str]:
+    s = "" if sport_key is None else str(sport_key).strip().lower()
+    if "wta" in s:
+        return "WTA"
+    if "atp" in s:
+        return "ATP"
+    return None
+
+
 def infer_level_from_sport_key(sport_key: Optional[str], default: float = 1.0) -> tuple[float, bool]:
     """Infer approximate tournament level from Odds API sport_key. Returns (level, used_fallback)."""
     s = "" if sport_key is None else str(sport_key).strip().lower()
     if not s:
         return float(default), True
 
-    # Known patterns in TheOddsAPI tennis sport keys
+    # Known category tags
     if "grand_slam" in s or "grandslam" in s:
         return 3.0, False
     if "atp_1000" in s or "wta_1000" in s or "masters" in s:
@@ -57,7 +66,26 @@ def infer_level_from_sport_key(sport_key: Optional[str], default: float = 1.0) -
     if "atp_250" in s or "wta_250" in s:
         return 1.3, False
 
-    # fallback: try generic text parser
+    # Practical tournament aliases often present in sports keys
+    alias_map = {
+        "qatar_open": 1.7,      # ATP Doha is 500
+        "dubai": 1.7,           # ATP Dubai is 500, WTA Dubai is often 1000/500 by year; keep conservative
+        "doha": 1.7,
+        "rotterdam": 1.7,
+        "rio_open": 1.7,
+        "acapulco": 1.7,
+        "delray_beach": 1.3,
+        "marseille": 1.7,
+        "buenos_aires": 1.3,
+        "santiago": 1.3,
+        "lyon": 1.7,
+        "halle": 1.7,
+        "queens_club": 1.7,
+    }
+    for token, lvl in alias_map.items():
+        if token in s:
+            return float(lvl), False
+
     lvl = tournament_level_from_text(s, default=default)
     used_fallback = abs(lvl - float(default)) < 1e-12
     return lvl, used_fallback
