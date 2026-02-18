@@ -6,6 +6,15 @@ from typing import Any, Optional
 import pandas as pd
 import streamlit as st
 
+try:
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+except Exception:  # pragma: no cover
+    get_script_run_ctx = None
+
+if get_script_run_ctx is not None and get_script_run_ctx() is None:
+    print("ui_app.py must be launched via 'streamlit run ui_app.py' (not 'python ui_app.py').")
+    raise SystemExit(0)
+
 from odds_theoddsapi import (
     best_decimal_odds_from_event,
     fetch_h2h_odds_for_sport,
@@ -251,7 +260,7 @@ with tab_predictions:
             ],
             axis=1,
         )
-        st.dataframe(styled, use_container_width=True, height=500)
+        st.dataframe(styled, width="stretch", height=500)
 
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -272,7 +281,7 @@ with tab_ledger:
         st.info(f"Ledger file not found: {ledger_path}")
     else:
         ledger_df = pd.read_csv(ledger_path)
-        st.dataframe(ledger_df, use_container_width=True, height=420)
+        st.dataframe(ledger_df, width="stretch", height=420)
         total_stake = float(pd.to_numeric(ledger_df.get("stake", 0), errors="coerce").fillna(0).sum())
         st.metric("Всего записанных ставок", value=len(ledger_df))
         st.metric("Сумма stake", value=format_money(total_stake, cfg["currency"]))

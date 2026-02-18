@@ -72,6 +72,8 @@ Launch visual UI:
 streamlit run ui_app.py
 ```
 
+Do not start it with `python ui_app.py` — Streamlit apps require `streamlit run`.
+
 UI includes:
 - settings panel (bankroll, risk profile, max events, calibration toggle),
 - one-click run button,
