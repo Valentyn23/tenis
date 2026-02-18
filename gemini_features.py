@@ -4,15 +4,18 @@ import time
 from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 # =========================================================
 # INIT
 # =========================================================
-load_dotenv()
+load_dotenv(find_dotenv(usecwd=True))
+load_dotenv(Path(__file__).resolve().with_name(".env"), override=False)
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+
+def _env(name: str) -> str:
+    return str(os.getenv(name, "")).strip()
+
 
 MODEL = "gemini-1.5-flash"
 
@@ -85,7 +88,7 @@ def save_cache(player,value):
 # =========================================================
 def get_player_news(player_name, max_articles=5):
 
-    if not NEWS_API_KEY:
+    if not _env("NEWS_API_KEY"):
         return []
 
     try:
@@ -96,7 +99,7 @@ def get_player_news(player_name, max_articles=5):
             "language": "en",
             "sortBy": "publishedAt",
             "pageSize": max_articles,
-            "apiKey": NEWS_API_KEY
+            "apiKey": _env("NEWS_API_KEY")
         }
 
         r = requests.get(url, params=params, timeout=TIMEOUT)
@@ -127,11 +130,12 @@ def get_player_news(player_name, max_articles=5):
 # =========================================================
 def ask_gemini(prompt):
 
-    if not GEMINI_API_KEY:
+    api_key = _env("GEMINI_API_KEY")
+    if not api_key:
         return None
 
     try:
-        url = f"https://generativelanguage.googleapis.com/v1/models/{MODEL}:generateContent?key={GEMINI_API_KEY}"
+        url = f"https://generativelanguage.googleapis.com/v1/models/{MODEL}:generateContent?key={api_key}"
 
         body = {
             "contents":[{"parts":[{"text":prompt}]}]
@@ -144,6 +148,13 @@ def ask_gemini(prompt):
 
     except:
         return None
+
+
+def gemini_is_configured() -> tuple[bool, str]:
+    if not _env("GEMINI_API_KEY"):
+        return False, "Missing GEMINI_API_KEY"
+    return True, "ok"
+
 
 
 # =========================================================
@@ -246,8 +257,9 @@ def get_pick_opinion(payload: dict) -> dict:
     Returns dict with:
       {"stance": "agree|neutral|disagree", "confidence": 0..1, "short_reason": str}
     """
-    neutral_resp = {"stance": "neutral", "confidence": 0.5, "short_reason": "Gemini unavailable"}
-    if not GEMINI_API_KEY:
+    configured, status_reason = gemini_is_configured()
+    neutral_resp = {"stance": "neutral", "confidence": 0.5, "short_reason": status_reason}
+    if not configured:
         return neutral_resp
 
     prompt = f"""
@@ -272,7 +284,7 @@ Rules:
     text = ask_gemini(prompt)
     data = parse_json(text)
     if not isinstance(data, dict):
-        return neutral_resp
+        return {"stance": "neutral", "confidence": 0.5, "short_reason": "Gemini API error or invalid JSON"}
 
     stance = str(data.get("stance", "neutral")).strip().lower()
     if stance not in {"agree", "neutral", "disagree"}:

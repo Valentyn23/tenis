@@ -24,7 +24,7 @@ from predictor import Predictor
 from config_shared import infer_level_from_sport_key, infer_mode_from_sport_key
 from settings import PROFILE_DEFAULTS, load_runtime_settings
 from bets_ledger import append_bets
-from gemini_features import get_pick_opinion
+from gemini_features import get_pick_opinion, gemini_is_configured
 
 st.set_page_config(page_title="Tennis Betting MVP", layout="wide")
 
@@ -183,6 +183,10 @@ with st.sidebar:
     max_events = st.number_input("Max events", min_value=1, max_value=300, value=int(SETTINGS.max_events), step=1)
     use_calibration = st.toggle("Use calibration", value=bool(SETTINGS.use_calibration))
     gemini_pick_opinion = st.toggle("Gemini opinion", value=bool(SETTINGS.gemini_pick_opinion))
+    if gemini_pick_opinion:
+        ok, status_reason = gemini_is_configured()
+        if not ok:
+            st.warning(f"Gemini disabled: {status_reason}. Add GEMINI_API_KEY to .env")
     currency = st.selectbox("Currency", options=["UAH", "USD", "EUR"], index=["UAH", "USD", "EUR"].index(SETTINGS.currency if SETTINGS.currency in {"UAH", "USD", "EUR"} else "UAH"))
     run = st.button("Запустить прогноз", type="primary")
 
