@@ -113,3 +113,20 @@ Outputs:
 ```bash
 pytest -q
 ```
+
+
+## Retrain + rebuild (ATP/WTA, includes 2026 data)
+
+The datasets under `data/ATP/*.xls*` and `data/WTA/*.xls*` include 2026 files.
+Use the helper script to retrain both models and rebuild both states:
+
+```bash
+python retrain_rebuild_validate.py
+```
+
+This runs:
+- `train/train.py` with `MODE=ATP`
+- `train/train.py` with `MODE=WTA`
+- `wrump.py` with `MODE=ATP`
+- `wrump.py` with `MODE=WTA`
+- `app.py` smoke run in strict mode

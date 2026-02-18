@@ -1,0 +1,28 @@
+{
+  "timestamp_utc": "2026-02-18T19:55:31.356887",
+  "settings": "regions=eu max_events=30 bankroll=1000.0 risk_profile=balanced min_edge=0.03 max_stake_pct=0.02 kelly_fraction=0.35 prob=[0.08,0.92] max_overround=1.06 strict_mode_match=True",
+  "preflight": {
+    "ATP": "OK",
+    "WTA": "MISSING_STATE:state/engine_state_wta.pkl"
+  },
+  "events_loaded": 8,
+  "used_by_mode": {
+    "ATP": 4,
+    "WTA": 0
+  },
+  "skipped_unknown_tour": 4,
+  "known_players_ratio": 1.0,
+  "fallback_level_ratio": 0.0,
+  "decision_counts": {
+    "BET_A": 0,
+    "BET_B": 0,
+    "NO_BET": 2,
+    "SKIP_MARKET": 2,
+    "SKIP_UNKNOWN_PLAYERS": 0
+  },
+  "market_skip_reasons": {
+    "bad_odds_range": 2
+  },
+  "cap_stake_hits": 0,
+  "bet_count": 0
+}

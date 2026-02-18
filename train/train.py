@@ -19,7 +19,7 @@ random.seed(42)
 # =========================================================
 # CONFIG
 # =========================================================
-MODE = "WTA"  # "ATP" или "WTA"
+MODE = os.getenv("MODE", "WTA").strip().upper()  # "ATP" или "WTA"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -47,6 +47,10 @@ def safe_float(x, default=None):
 
 def clamp(x, lo, hi):
     return max(lo, min(hi, x))
+
+
+def bounded_signal_diff(x: float, scale: float = 8.0) -> float:
+    return math.tanh(float(x) / float(scale))
 
 def normalize_surface(s: str) -> str:
     s = str(s).strip().lower()
@@ -335,9 +339,9 @@ for i, row in data.iterrows():
         "winrate10_diff": winrate(A, 10) - winrate(B, 10),
         "winrate30_diff": winrate(A, 30) - winrate(B, 30),
         "streak_diff": float(A.streak - B.streak),
-        "fatigue_diff": float(A.fatigue - B.fatigue),
-        "activity7_diff": float(A.activity7 - B.activity7),
-        "activity14_diff": float(A.activity14 - B.activity14),
+        "fatigue_diff": float(bounded_signal_diff(A.fatigue - B.fatigue, scale=6.0)),
+        "activity7_diff": float(bounded_signal_diff(A.activity7 - B.activity7, scale=8.0)),
+        "activity14_diff": float(bounded_signal_diff(A.activity14 - B.activity14, scale=10.0)),
         "rest_days_diff": rest_days(A) - rest_days(B),
         "matches_diff": float(A.matches - B.matches),
         "surface_penalty_diff": float(A_pen - B_pen),
