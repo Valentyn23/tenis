@@ -34,12 +34,21 @@ def main() -> None:
     run_step("Train ATP", [python, "train/train.py"], env={"MODE": "ATP"})
     run_step("Train WTA", [python, "train/train.py"], env={"MODE": "WTA"})
 
+    kpi_sessions = int(os.getenv("KPI_SESSIONS", "30"))
+    kpi_max_events = os.getenv("KPI_MAX_EVENTS", "30")
+
+    for _ in range(kpi_sessions):
+        env = os.environ.copy()
+        env["MAX_EVENTS"] = kpi_max_events
+        env["SAVE_REPORT"] = "1"
+        # запусти app.py через subprocess.run(..., env=env, check=True)
+
     # Warm states separately
     run_step("Warmup ATP state", [python, "wrump.py"], env={"MODE": "ATP"})
     run_step("Warmup WTA state", [python, "wrump.py"], env={"MODE": "WTA"})
 
     # Quick app run preflight
-    run_step("App smoke (strict mode)", [python, "app.py"], env={"STRICT_MODE_MATCH": "1", "MAX_EVENTS": "10"})
+    run_step("App smoke (strict mode)", [python, "app.py"], env={"STRICT_MODE_MATCH": "1", "MAX_EVENTS": "30"})
 
     print("\nAll steps completed successfully.")
 

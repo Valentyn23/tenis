@@ -25,10 +25,12 @@ SETTINGS = load_runtime_settings()
 
 def make_predictor(mode: str) -> Optional[Predictor]:
     state_path = SETTINGS.state_path_atp if mode == "ATP" else SETTINGS.state_path_wta
+    use_calibration = (os.getenv("USE_CALIBRATION", "0") == "0")
     try:
         return Predictor(
             model_path=f"model/{mode.lower()}_model.pkl",
             state_path=state_path,
+            use_calibration=use_calibration,
             bankroll=SETTINGS.bankroll,
             max_stake_pct=SETTINGS.max_stake_pct,
             kelly_fraction_used=SETTINGS.kelly_fraction,
@@ -95,13 +97,17 @@ def main():
             predictors[mode] = pred
 
     events = []
-    for k in tennis_keys[:8]:
+    for k in tennis_keys:
         try:
             data = fetch_h2h_odds_for_sport(k, regions=SETTINGS.regions, odds_format="decimal")
             for e in data:
                 best = best_decimal_odds_from_event(e)
                 if best:
                     events.append(best)
+                    if len(events) >= SETTINGS.max_events:
+                        break
+            if len(events) >= SETTINGS.max_events:
+                break
         except Exception as ex:
             print("Odds error for", k, ex)
 

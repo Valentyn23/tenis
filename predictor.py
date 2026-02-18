@@ -106,6 +106,7 @@ class Predictor:
         min_edge: float = 0.015,              # only bet if edge >= 1.5%
         state_path: str = "state/engine_state.pkl",
         debug: bool = False,
+        use_calibration: bool = True,
 
         # --- safety controls ---
         prob_floor: float = 0.05,             # avoid 0.001/0.999 extremes
@@ -119,7 +120,7 @@ class Predictor:
         clamp_guard_band: float = 0.02,
     ):
         self.debug = bool(debug)
-
+        self.use_calibration = bool(use_calibration)
         self.prob_floor = float(prob_floor)
         self.prob_ceil = float(prob_ceil)
         self.min_odds_allowed = float(min_odds_allowed)
@@ -334,9 +335,12 @@ class Predictor:
 
         # 4) predict + calibrate
         raw = float(self.model.predict_proba(X)[:, 1][0])
-        pA = float(self.cal.transform([raw])[0])
 
-        # SAFETY clamp (betting)
+        if self.use_calibration and self.cal is not None:
+            pA = float(self.cal.transform([raw])[0])
+        else:
+            pA = raw
+
         pA = clamp(pA, self.prob_floor, self.prob_ceil)
 
         # 5) market sanity skip (important!)
