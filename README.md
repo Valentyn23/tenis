@@ -56,6 +56,13 @@ Reports:
 - `REPORT_DIR` (default `reports`)
 - `PRINT_TOP_N` (default `25`)
 
+Money / ledger:
+- `CURRENCY` (default `UAH`)
+- `BETS_LEDGER_PATH` (default `bets/ledger.csv`)
+
+Gemini:
+- `GEMINI_PICK_OPINION` (default `0`) — ask Gemini for secondary opinion on each BET pick
+
 ## Typical troubleshooting
 
 ### WTA/ATP predictor unavailable
@@ -107,6 +114,27 @@ Outputs:
 - Kelly fractions
 - recommended stake
 - `BET` / `NO_BET`
+
+## Bet ledger and post-analysis
+
+`app.py` now writes every bet decision (`BET_A` / `BET_B`) to CSV ledger.
+
+Default path:
+
+```bash
+bets/ledger.csv
+```
+
+Ledger columns include:
+- timestamp
+- event id
+- match players
+- pick/decision
+- odds / probability / edge
+- stake in selected `CURRENCY` (UAH by default)
+- result and PnL (for settled bets)
+
+Current app runtime writes new bet picks to ledger only (clean mode, no auto-settlement in `app.py`).
 
 ## Tests
 

@@ -22,7 +22,7 @@
 
 import math
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 import joblib
@@ -267,7 +267,7 @@ class Predictor:
         date_iso: Optional[str] = None,
     ) -> Dict[str, Any]:
         if date_iso is None:
-            date_iso = datetime.utcnow().date().isoformat()
+            date_iso = datetime.now(timezone.utc).date().isoformat()
 
         playerA_raw = str(playerA)
         playerB_raw = str(playerB)

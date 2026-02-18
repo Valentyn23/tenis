@@ -15,6 +15,7 @@ class RuntimeSettings:
     default_indoor: float
 
     bankroll: float
+    currency: str
     max_stake_pct: float
     kelly_fraction: float
     min_edge: float
@@ -32,13 +33,17 @@ class RuntimeSettings:
 
     report_dir: str
     save_report: bool
+    bets_ledger_path: str
     print_top_n: int
+
+    gemini_pick_opinion: bool
 
     risk_profile: str
 
     def summary(self) -> str:
         return (
             f"regions={self.regions} max_events={self.max_events} bankroll={self.bankroll} "
+            f"currency={self.currency} "
             f"risk_profile={self.risk_profile} min_edge={self.min_edge} max_stake_pct={self.max_stake_pct} "
             f"kelly_fraction={self.kelly_fraction} prob=[{self.prob_floor},{self.prob_ceil}] "
             f"max_overround={self.max_overround} strict_mode_match={self.strict_mode_match}"
@@ -57,12 +62,12 @@ PROFILE_DEFAULTS = {
         "soft_cap_factor": 0.50,
     },
     "balanced": {
-        "max_stake_pct": 0.025,
+        "max_stake_pct": 0.02,
         "kelly_fraction": 0.35,
         "min_edge": 0.03,
         "prob_floor": 0.08,
         "prob_ceil": 0.92,
-        "max_overround": 1.07,
+        "max_overround": 1.06,
         "soft_cap_edge": 0.25,
         "soft_cap_factor": 0.60,
     },
@@ -99,6 +104,7 @@ def load_runtime_settings() -> RuntimeSettings:
         default_best_of=float(os.getenv("DEFAULT_BEST_OF", "3")),
         default_indoor=float(os.getenv("DEFAULT_INDOOR", "0")),
         bankroll=float(os.getenv("BANKROLL", "1000")),
+        currency=os.getenv("CURRENCY", "UAH").strip().upper(),
         max_stake_pct=float(os.getenv("MAX_STAKE_PCT", str(defaults["max_stake_pct"]))),
         kelly_fraction=float(os.getenv("KELLY_FRACTION", str(defaults["kelly_fraction"]))),
         min_edge=float(os.getenv("MIN_EDGE", str(defaults["min_edge"]))),
@@ -112,6 +118,8 @@ def load_runtime_settings() -> RuntimeSettings:
         state_path_wta=os.getenv("STATE_PATH_WTA", "state/engine_state_wta.pkl"),
         report_dir=os.getenv("REPORT_DIR", "reports"),
         save_report=_env_bool("SAVE_REPORT", True),
+        bets_ledger_path=os.getenv("BETS_LEDGER_PATH", "bets/ledger.csv"),
         print_top_n=int(os.getenv("PRINT_TOP_N", "25")),
+        gemini_pick_opinion=_env_bool("GEMINI_PICK_OPINION", False),
         risk_profile=profile,
     )

@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 import json
-import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -19,18 +18,29 @@ from odds_theoddsapi import list_active_tennis_sports, fetch_h2h_odds_for_sport,
 from predictor import Predictor
 from config_shared import infer_level_from_sport_key, infer_mode_from_sport_key
 from settings import load_runtime_settings
+from bets_ledger import append_bets
+from gemini_features import get_pick_opinion
 
 SETTINGS = load_runtime_settings()
+
+CURRENCY_SYMBOLS = {
+    "UAH": "₴",
+    "USD": "$",
+    "EUR": "€",
+}
+
+
+def format_money(amount: float, currency: str) -> str:
+    symbol = CURRENCY_SYMBOLS.get(currency, f"{currency} ")
+    return f"{symbol}{amount:.2f}"
 
 
 def make_predictor(mode: str) -> Optional[Predictor]:
     state_path = SETTINGS.state_path_atp if mode == "ATP" else SETTINGS.state_path_wta
-    use_calibration = (os.getenv("USE_CALIBRATION", "0") == "0")
     try:
         return Predictor(
             model_path=f"model/{mode.lower()}_model.pkl",
             state_path=state_path,
-            use_calibration=use_calibration,
             bankroll=SETTINGS.bankroll,
             max_stake_pct=SETTINGS.max_stake_pct,
             kelly_fraction_used=SETTINGS.kelly_fraction,
@@ -71,7 +81,7 @@ def save_session_report(report: dict) -> Optional[Path]:
         return None
     report_dir = Path(SETTINGS.report_dir)
     report_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     path = report_dir / f"session_{ts}.json"
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2))
     return path
@@ -165,6 +175,23 @@ def main():
             date_iso=dt,
         )
         out["tour_mode"] = event_mode
+        out["event_id"] = ev.get("id")
+        out["commence_time"] = ev.get("commence_time")
+
+        if SETTINGS.gemini_pick_opinion and out.get("decision") in ("BET_A", "BET_B"):
+            payload = {
+                "playerA": A,
+                "playerB": B,
+                "decision": out.get("decision"),
+                "pick": out.get("pick"),
+                "prob_A_win": out.get("prob_A_win"),
+                "oddsA": oddsA,
+                "oddsB": oddsB,
+                "edgeA": out.get("edgeA"),
+                "edgeB": out.get("edgeB"),
+                "pick_edge": out.get("pick_edge"),
+            }
+            out["gemini_opinion"] = get_pick_opinion(payload)
 
         dec = out.get("decision", "NO_BET")
         if dec in decision_counts:
@@ -208,8 +235,12 @@ def main():
     if bet_count:
         print(f"Cap stake hits: {cap_stake_hits}/{bet_count}")
 
+    saved_bets = append_bets(SETTINGS.bets_ledger_path, picks, currency=SETTINGS.currency)
+    if saved_bets:
+        print(f"Saved bets to ledger: {saved_bets} -> {SETTINGS.bets_ledger_path}")
+
     report = {
-        "timestamp_utc": datetime.utcnow().isoformat(),
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "settings": SETTINGS.summary(),
         "preflight": preflight,
         "events_loaded": len(events),
@@ -221,6 +252,8 @@ def main():
         "market_skip_reasons": market_skip_reasons,
         "cap_stake_hits": cap_stake_hits,
         "bet_count": bet_count,
+        "currency": SETTINGS.currency,
+        "bets_ledger_path": SETTINGS.bets_ledger_path,
     }
     report_path = save_session_report(report)
     if report_path:
@@ -237,8 +270,11 @@ def main():
             f"[{p.get('tour_mode', '?')}] {A} vs {B} | p(A)={prob:.3f} | "
             f"oddsA={p['oddsA']:.2f} oddsB={p['oddsB']:.2f} | "
             f"edgeA={p['edgeA']:+.3f} edgeB={p['edgeB']:+.3f} | "
-            f"{dec} pick={p['pick']} stake={p['stake']} edge={p.get('pick_edge', 0):+.3f}"
+            f"{dec} pick={p['pick']} stake={format_money(float(p['stake']), SETTINGS.currency)} edge={p.get('pick_edge', 0):+.3f}"
         )
+        if p.get("gemini_opinion"):
+            g = p["gemini_opinion"]
+            line += f" | Gemini={g.get('stance')} conf={float(g.get('confidence', 0.5)):.2f}"
         print(line)
 
 
