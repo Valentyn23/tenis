@@ -2,14 +2,17 @@ import os
 import glob
 import math
 import random
+import sys
 from dataclasses import dataclass
 from typing import Dict, Tuple, Optional
 from collections import defaultdict
+from pathlib import Path
 import pandas as pd
 from xgboost import XGBClassifier
 from sklearn.metrics import roc_auc_score, log_loss, brier_score_loss
 from sklearn.isotonic import IsotonicRegression
 import joblib
+
 
 random.seed(42)
 
@@ -17,8 +20,13 @@ random.seed(42)
 # CONFIG
 # =========================================================
 MODE = "WTA"  # "ATP" или "WTA"
-DATA_PATH = f"data/{MODE}/*.xls*"
-OUT_PATH = f"model/{MODE.lower()}_model.pkl"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+DATA_PATH = str(PROJECT_ROOT / "data" / MODE / "*.xls*")
+OUT_PATH = PROJECT_ROOT / "model" / f"{MODE.lower()}_model.pkl"
+
+from config_shared import dynamic_k as shared_dynamic_k, tournament_level_from_text
 
 INITIAL_ELO = 1500.0
 
@@ -64,15 +72,8 @@ def is_indoor_from_row(row) -> int:
 
 def get_level(row) -> float:
     # ATP: Series, WTA: Tier
-    val = str(row.get("Series", "")) if MODE == "ATP" else str(row.get("Tier", ""))
-    v = val.lower()
-    if ("grand" in v) or ("slam" in v):
-        return 3.0
-    if ("masters" in v) or ("1000" in v):
-        return 2.0
-    if ("500" in v) or ("premier" in v):
-        return 1.0
-    return 0.0
+    val = row.get("Series", "") if MODE == "ATP" else row.get("Tier", "")
+    return tournament_level_from_text(val, default=1.0)
 
 def round_score(r) -> float:
     r = str(r)
@@ -100,16 +101,7 @@ def expected(r1, r2):
     return 1.0 / (1.0 + 10.0 ** ((r2 - r1) / 400.0))
 
 def dynamic_k(matches: int, level: float, rnd: float) -> float:
-    K = 32.0 if MODE == "ATP" else 24.0
-    if matches < 30:
-        K *= 1.6
-    elif matches < 100:
-        K *= 1.2
-    else:
-        K *= 0.85
-    K *= (1.0 + level * 0.15)
-    K *= (1.0 + rnd * 0.05)
-    return K
+    return shared_dynamic_k(matches, level, rnd, mode=MODE)
 
 def update_elo(r1, r2, res, K):
     e = expected(r1, r2)
@@ -486,9 +478,9 @@ print("Brier:", brier_score_loss(y_test, pred))
 # =========================================================
 # SAVE
 # =========================================================
-os.makedirs("../model", exist_ok=True)
+OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 joblib.dump(
     {"model": model, "calibrator": iso, "feature_names": feature_names, "mode": MODE, "odds_features": ODDS_FEATURES},
-    OUT_PATH
+    str(OUT_PATH)
 )
-print("\nSaved:", OUT_PATH)
+print("\nSaved:", OUT_PATH.resolve())

@@ -8,6 +8,8 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Optional
 
+from config_shared import dynamic_k as shared_dynamic_k, normalize_mode
+
 
 # =========================================================
 # CONFIG
@@ -107,7 +109,8 @@ class PlayerState:
 # ENGINE
 # =========================================================
 class StateEngine:
-    def __init__(self):
+    def __init__(self, mode: str = "ATP"):
+        self.mode = normalize_mode(mode)
         self.players = defaultdict(PlayerState)
         self.h2h = defaultdict(int)           # (A,B) -> wins of A vs B
         self.h2h_surface = defaultdict(int)   # (A,B,surface) -> wins of A vs B on surface
@@ -245,7 +248,7 @@ class StateEngine:
         W = self.players[winner]
         L = self.players[loser]
 
-        K = dynamic_k(W.matches, level, rnd)
+        K = shared_dynamic_k(W.matches, level, rnd, mode=self.mode)
 
         # base Elo update
         W.elo, L.elo = update_elo(W.elo, L.elo, 1.0, K)

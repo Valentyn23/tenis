@@ -87,6 +87,15 @@ def clamp(x: float, lo: float, hi: float) -> float:
 # =========================================================
 # PREDICTOR
 # =========================================================
+
+GEMINI_FEATURE_COLUMNS = {
+    "injury_diff",
+    "mental_diff",
+    "motivation_diff",
+    "fatigue_news_diff",
+    "confidence_diff",
+}
+
 class Predictor:
     def __init__(
         self,
@@ -99,10 +108,14 @@ class Predictor:
         debug: bool = False,
 
         # --- safety controls ---
-        prob_floor: float = 0.03,             # avoid 0.001/0.999 extremes
-        prob_ceil: float = 0.97,
-        min_odds_allowed: float = 1.10,       # skip ultra-favorites (often bad liquidity)
-        max_odds_allowed: float = 15.0,       # skip extreme underdogs (often bad lines)
+        prob_floor: float = 0.05,             # avoid 0.001/0.999 extremes
+        prob_ceil: float = 0.95,
+        min_odds_allowed: float = 1.15,       # skip ultra-favorites (often bad liquidity)
+        max_odds_allowed: float = 12.0,       # skip extreme underdogs (often bad lines)
+        max_overround: float = 1.08,          # skip over-vig markets
+        strict_mode_match: bool = False,      # fail if engine/model mode mismatch
+        soft_cap_edge: float = 0.25,          # additional dampener above this edge
+        soft_cap_factor: float = 0.60,
     ):
         self.debug = bool(debug)
 
@@ -110,6 +123,10 @@ class Predictor:
         self.prob_ceil = float(prob_ceil)
         self.min_odds_allowed = float(min_odds_allowed)
         self.max_odds_allowed = float(max_odds_allowed)
+        self.max_overround = float(max_overround)
+        self.strict_mode_match = bool(strict_mode_match)
+        self.soft_cap_edge = float(soft_cap_edge)
+        self.soft_cap_factor = float(soft_cap_factor)
 
         # ---- load model bundle ----
         bundle = joblib.load(model_path)
@@ -122,6 +139,7 @@ class Predictor:
         self.model = bundle["model"]
         self.cal = bundle["calibrator"]
         self.feature_names = bundle.get("feature_names", None)
+        self.model_mode = str(bundle.get("mode", "ATP")).upper()
 
         # ---- bankroll / staking ----
         self.bankroll = float(bankroll)
@@ -142,12 +160,23 @@ class Predictor:
         self._known_players = set(self.engine.players.keys())
         self._exact_name_lookup = {p.lower(): p for p in self._known_players}
         self._surname_initial_lookup = self._build_surname_initial_lookup()
+        feature_set = set(self.feature_names or [])
+        self.use_gemini_features = bool(feature_set.intersection(GEMINI_FEATURE_COLUMNS))
         total_player_matches = sum(st.matches for st in self.engine.players.values())
         inferred_matches = total_player_matches / 2.0
+        engine_mode = str(getattr(self.engine, "mode", "ATP")).upper()
         print(
             f"Loaded StateEngine from {state_path} | "
-            f"players: {len(self.engine.players)} | inferred_matches: {inferred_matches:.0f}"
+            f"players: {len(self.engine.players)} | inferred_matches: {inferred_matches:.0f} | "
+            f"engine_mode: {engine_mode} | model_mode: {self.model_mode}"
         )
+        print(f"Gemini features enabled by model schema: {self.use_gemini_features}")
+
+        if self.strict_mode_match and engine_mode != self.model_mode:
+            raise RuntimeError(
+                f"Mode mismatch: engine_mode={engine_mode}, model_mode={self.model_mode}. "
+                f"Use a matching state_path for this model."
+            )
 
     def _build_surname_initial_lookup(self) -> Dict[tuple[str, str], Optional[str]]:
         lookup: Dict[tuple[str, str], Optional[str]] = {}
@@ -204,14 +233,19 @@ class Predictor:
     # -----------------------------------------------------
     # MARKET SANITY
     # -----------------------------------------------------
-    def _is_bad_market(self, oddsA: float, oddsB: float) -> bool:
+    def _is_bad_market(self, oddsA: float, oddsB: float) -> tuple[bool, str]:
         lo = min(float(oddsA), float(oddsB))
         hi = max(float(oddsA), float(oddsB))
         if lo < self.min_odds_allowed:
-            return True
+            return True, "bad_odds_range"
         if hi > self.max_odds_allowed:
-            return True
-        return False
+            return True, "bad_odds_range"
+
+        overround = implied_prob(float(oddsA)) + implied_prob(float(oddsB))
+        if overround > self.max_overround:
+            return True, "high_overround"
+
+        return False, "ok"
 
     # -----------------------------------------------------
     # CORE PREDICT
@@ -288,8 +322,9 @@ class Predictor:
             date=date_iso,
         )
 
-        # 2) Gemini ALWAYS ON (raw names)
-        self._add_gemini_diff(feats, playerA_raw, playerB_raw)
+        # 2) Gemini features only if model schema includes them
+        if self.use_gemini_features:
+            self._add_gemini_diff(feats, playerA_raw, playerB_raw)
 
         # 3) align columns
         cols = self.feature_names or sorted(feats.keys())
@@ -303,7 +338,8 @@ class Predictor:
         pA = clamp(pA, self.prob_floor, self.prob_ceil)
 
         # 5) market sanity skip (important!)
-        if self._is_bad_market(float(oddsA), float(oddsB)):
+        bad_market, market_reason = self._is_bad_market(float(oddsA), float(oddsB))
+        if bad_market:
             return {
                 "playerA": playerA_raw,
                 "playerB": playerB_raw,
@@ -314,7 +350,7 @@ class Predictor:
                 "oddsA": float(oddsA),
                 "oddsB": float(oddsB),
                 "decision": "SKIP_MARKET",
-                "reason": "bad_odds_range",
+                "reason": market_reason,
                 "stake": 0.0,
                 "pick": None,
                 "pick_odds": None,
@@ -341,6 +377,11 @@ class Predictor:
 
         stakeA = self.bankroll * clamp(fA, 0.0, self.max_stake_pct)
         stakeB = self.bankroll * clamp(fB, 0.0, self.max_stake_pct)
+
+        if abs(edgeA) > self.soft_cap_edge:
+            stakeA *= self.soft_cap_factor
+        if abs(edgeB) > self.soft_cap_edge:
+            stakeB *= self.soft_cap_factor
 
         decision = "NO_BET"
         pick = None

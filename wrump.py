@@ -6,13 +6,15 @@ from datetime import datetime
 
 from state_engine import StateEngine
 from state_persistence import save_engine
+from config_shared import normalize_mode, tournament_level_from_text
 
 # =========================================================
 # CONFIG
 # =========================================================
 DATA_FOLDER = "data"
 EXTENSIONS = ("*.xlsx", "*.xls", "*.csv")
-STATE_PATH = "state/engine_state.pkl"
+MODE = normalize_mode(os.getenv("MODE", "ATP"))
+STATE_PATH = os.getenv("STATE_PATH", f"state/engine_state_{MODE.lower()}.pkl")
 
 
 # =========================================================
@@ -77,19 +79,7 @@ def parse_date(x):
 
 
 def level_from_series(series_or_tier):
-    s = "" if series_or_tier is None else str(series_or_tier).lower()
-
-    # ATP: Series can contain Grand Slam / Masters / ATP250/500
-    # WTA: Tier often indicates Premier/International/Grand Slam etc.
-    if "grand" in s or "slam" in s:
-        return 3.0
-    if "masters" in s or "1000" in s:
-        return 2.0
-    if "500" in s or "premier" in s:
-        return 1.7
-    if "250" in s or "international" in s:
-        return 1.3
-    return 1.0
+    return tournament_level_from_text(series_or_tier, default=1.0)
 
 
 def parse_round(rnd):
@@ -267,7 +257,7 @@ def warmup_engine():
     matches = build_match_history()
     print("\nTotal matches:", len(matches))
 
-    engine = StateEngine()
+    engine = StateEngine(mode=MODE)
 
     for i, m in enumerate(matches):
         engine.update_after_match(
@@ -294,6 +284,8 @@ def warmup_engine():
 # MAIN
 # =========================================================
 if __name__ == "__main__":
+    print(f"Warmup MODE: {MODE}")
+    print(f"Warmup STATE_PATH: {STATE_PATH}")
     engine = warmup_engine()
 
     print("\nExample player states:")
