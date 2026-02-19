@@ -72,6 +72,8 @@ Launch visual UI:
 streamlit run ui_app.py
 ```
 
+Do not start it with `python ui_app.py` — Streamlit apps require `streamlit run`.
+
 UI includes:
 - settings panel (bankroll, risk profile, max events, calibration toggle),
 - one-click run button,
@@ -100,6 +102,21 @@ Use matching state/model files or set (not recommended):
 
 ```bash
 STRICT_MODE_MATCH=0
+```
+
+### Gemini shows "Gemini unavailable"
+
+Set API key in project `.env` and restart Streamlit:
+
+```bash
+GEMINI_API_KEY=your_key_here
+GEMINI_PICK_OPINION=1
+```
+
+Then run:
+
+```bash
+streamlit run ui_app.py
 ```
 
 ### Too many `SKIP_MARKET`
