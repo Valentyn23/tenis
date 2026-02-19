@@ -19,6 +19,7 @@ from odds_theoddsapi import (
     best_decimal_odds_from_event,
     fetch_h2h_odds_for_sport,
     list_tennis_sports,
+    list_supported_tennis_keys,
 )
 from predictor import Predictor
 from config_shared import infer_level_from_sport_key, infer_mode_from_sport_key
@@ -61,17 +62,17 @@ def make_predictor(mode: str, cfg: dict[str, Any]) -> Optional[Predictor]:
 
 
 def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], int]:
-    sports = list_tennis_sports(only_active=False)
-    tennis_keys = [s["key"] for s in sports if "tennis" in s.get("key", "").lower()]
-    extra_keys = [k.strip() for k in cfg.get("extra_tennis_keys", "").split(",") if k.strip()]
-    if extra_keys:
-        merged = []
-        seen = set()
-        for k in tennis_keys + extra_keys:
-            if k not in seen:
-                seen.add(k)
-                merged.append(k)
-        tennis_keys = merged
+    tennis_keys = list_supported_tennis_keys()
+
+    # keep compatibility with live-discovered keys if API returns additional tennis entries
+    try:
+        sports = list_tennis_sports(only_active=False)
+        discovered = [s["key"] for s in sports if "tennis" in s.get("key", "").lower()]
+        for k in discovered:
+            if k not in tennis_keys:
+                tennis_keys.append(k)
+    except Exception:
+        pass
 
     required_modes = {m for m in (infer_mode_from_sport_key(k) for k in tennis_keys) if m in {"ATP", "WTA"}}
     predictors: dict[str, Predictor] = {}
@@ -95,8 +96,9 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
                         break
             if len(events) >= cfg["max_events"]:
                 break
-        except Exception as ex:
-            st.warning(f"Odds error for {k}: {ex}")
+        except Exception:
+            # many tournaments may be out of season and return no market
+            continue
 
     picks = []
     decision_counts = {"BET_A": 0, "BET_B": 0, "NO_BET": 0, "SKIP_MARKET": 0, "SKIP_UNKNOWN_PLAYERS": 0}
@@ -190,32 +192,7 @@ with st.sidebar:
     bankroll = st.number_input("Банкролл", min_value=1.0, value=float(SETTINGS.bankroll), step=100.0)
     risk_profile = st.selectbox("Risk profile", options=list(PROFILE_DEFAULTS.keys()), index=list(PROFILE_DEFAULTS.keys()).index(SETTINGS.risk_profile if SETTINGS.risk_profile in PROFILE_DEFAULTS else "balanced"))
     max_events = st.number_input("Max events", min_value=1, max_value=300, value=int(SETTINGS.max_events), step=1)
-
-    discovered_keys = []
-    discover_error = None
-    try:
-        discovered_keys = [x.get("key") for x in list_tennis_sports(only_active=False) if x.get("key")]
-    except Exception as exc:
-        discover_error = str(exc)
-
-    if discover_error:
-        st.warning(f"Tournament key discovery failed: {discover_error}")
-    else:
-        st.caption(f"Discovered tennis keys: {len(discovered_keys)}")
-
-    default_extra = [k.strip() for k in SETTINGS.extra_tennis_keys.split(",") if k.strip()]
-    extra_keys_selected = st.multiselect(
-        "Add tournament keys manually",
-        options=discovered_keys,
-        default=[k for k in default_extra if k in discovered_keys],
-        help="Pick extra tournament keys to force-include in odds fetching.",
-    )
-
-    extra_tennis_keys = st.text_input(
-        "Extra tennis keys (comma-separated)",
-        value=",".join(extra_keys_selected) if extra_keys_selected else SETTINGS.extra_tennis_keys,
-    )
-
+    st.caption("Tournament pool: built-in The Odds API tennis tournaments (ATP/WTA majors + masters).")
     use_calibration = st.toggle("Use calibration", value=bool(SETTINGS.use_calibration))
     gemini_pick_opinion = st.toggle("Gemini opinion", value=bool(SETTINGS.gemini_pick_opinion))
     if gemini_pick_opinion:
@@ -229,7 +206,6 @@ profile_defaults = PROFILE_DEFAULTS[risk_profile]
 cfg = {
     "regions": SETTINGS.regions,
     "max_events": int(max_events),
-    "extra_tennis_keys": extra_tennis_keys,
     "default_surface": SETTINGS.default_surface,
     "default_level": SETTINGS.default_level,
     "default_round": SETTINGS.default_round,

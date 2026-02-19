@@ -78,10 +78,9 @@ streamlit run ui_app.py
 Do not start it with `python ui_app.py` — Streamlit apps require `streamlit run`.
 
 UI includes:
-The Streamlit UI now always discovers from all tennis keys and lets you manually include specific tournament keys.
-
-- settings panel (bankroll, risk profile, max events, discovered tournament key picker, manual tournament keys, calibration toggle),
+- settings panel (bankroll, risk profile, max events, calibration toggle),
 - one-click run button,
+- Streamlit uses built-in The Odds API tennis tournament list (ATP/WTA majors + masters) and auto-tries them each run.
 - recommendations table with color highlights (green = BET, red = NO_BET/SKIP),
 - Gemini secondary opinion columns,
 - ledger tab reading `bets/ledger.csv`,
