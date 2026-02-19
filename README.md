@@ -78,7 +78,9 @@ streamlit run ui_app.py
 Do not start it with `python ui_app.py` — Streamlit apps require `streamlit run`.
 
 UI includes:
-- settings panel (bankroll, risk profile, max events, active/all tournaments, manual tournament keys, calibration toggle),
+The Streamlit UI now always discovers from all tennis keys and lets you manually include specific tournament keys.
+
+- settings panel (bankroll, risk profile, max events, discovered tournament key picker, manual tournament keys, calibration toggle),
 - one-click run button,
 - recommendations table with color highlights (green = BET, red = NO_BET/SKIP),
 - Gemini secondary opinion columns,
