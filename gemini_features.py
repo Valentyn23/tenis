@@ -4,17 +4,21 @@ import time
 from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 # =========================================================
 # INIT
 # =========================================================
-load_dotenv()
+load_dotenv(find_dotenv(usecwd=True))
+load_dotenv(Path(__file__).resolve().with_name(".env"), override=False)
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 
-MODEL = "gemini-1.5-flash"
+def _env(name: str) -> str:
+    return str(os.getenv(name, "")).strip()
+
+
+DEFAULT_MODEL = "gemini-1.5-flash-latest"
+API_VERSIONS = ("v1", "v1beta")
 
 TIMEOUT = 25
 CACHE_TTL = 60 * 60 * 6   # 6 часов
@@ -22,6 +26,32 @@ SLEEP = 0.6
 
 CACHE_DIR = Path("cache")
 CACHE_DIR.mkdir(exist_ok=True)
+
+
+def _gemini_models() -> list[str]:
+    configured = _env("GEMINI_MODEL")
+    models = [configured] if configured else []
+    # fallback chain for compatibility across API versions/projects
+    models.extend(["gemini-1.5-flash-latest", "gemini-1.5-flash", "gemini-1.5-pro-latest"])
+
+    out = []
+    seen = set()
+    for m in models:
+        key = (m or "").strip()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(key)
+    if not out:
+        out = [DEFAULT_MODEL]
+    return out
+
+
+def _extract_http_error(response: requests.Response) -> str:
+    try:
+        payload = response.json()
+        return payload.get("error", {}).get("message") or payload.get("error", {}).get("status") or response.text[:160]
+    except Exception:
+        return response.text[:160]
 
 
 # =========================================================
@@ -85,7 +115,7 @@ def save_cache(player,value):
 # =========================================================
 def get_player_news(player_name, max_articles=5):
 
-    if not NEWS_API_KEY:
+    if not _env("NEWS_API_KEY"):
         return []
 
     try:
@@ -96,7 +126,7 @@ def get_player_news(player_name, max_articles=5):
             "language": "en",
             "sortBy": "publishedAt",
             "pageSize": max_articles,
-            "apiKey": NEWS_API_KEY
+            "apiKey": _env("NEWS_API_KEY")
         }
 
         r = requests.get(url, params=params, timeout=TIMEOUT)
@@ -127,23 +157,68 @@ def get_player_news(player_name, max_articles=5):
 # =========================================================
 def ask_gemini(prompt):
 
-    if not GEMINI_API_KEY:
-        return None
+    api_key = _env("GEMINI_API_KEY")
+    if not api_key:
+        return None, "Missing GEMINI_API_KEY"
 
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1/models/{MODEL}:generateContent?key={GEMINI_API_KEY}"
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2},
+    }
 
-        body = {
-            "contents":[{"parts":[{"text":prompt}]}]
-        }
+    last_reason = "Gemini call not attempted"
+    for model in _gemini_models():
+        for version in API_VERSIONS:
+            url = f"https://generativelanguage.googleapis.com/{version}/models/{model}:generateContent?key={api_key}"
 
-        r = requests.post(url, json=body, timeout=TIMEOUT)
-        r.raise_for_status()
+            try:
+                r = requests.post(url, json=body, timeout=TIMEOUT)
+            except requests.RequestException as exc:
+                last_reason = f"Gemini request failed: {exc.__class__.__name__}"
+                continue
 
-        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            if r.status_code != 200:
+                msg = _extract_http_error(r) or "unknown error"
+                last_reason = f"Gemini HTTP {r.status_code} [{version}/{model}]: {msg}"
+                # keep trying known fallbacks for 404/400 capability mismatches
+                if r.status_code in {400, 404}:
+                    continue
+                # for auth/quota etc. retrying other models usually won't help
+                return None, last_reason
 
-    except:
-        return None
+            try:
+                payload = r.json()
+            except ValueError:
+                last_reason = f"Gemini returned non-JSON response [{version}/{model}]"
+                continue
+
+            candidates = payload.get("candidates") or []
+            if not candidates:
+                last_reason = f"Gemini response has no candidates [{version}/{model}]"
+                continue
+
+            parts = candidates[0].get("content", {}).get("parts") or []
+            if not parts:
+                last_reason = f"Gemini response has no text parts [{version}/{model}]"
+                continue
+
+            text = parts[0].get("text")
+            if not text:
+                last_reason = f"Gemini response text is empty [{version}/{model}]"
+                continue
+
+            return text, f"ok [{version}/{model}]"
+
+    return None, last_reason
+
+
+
+def gemini_is_configured() -> tuple[bool, str]:
+    if not _env("GEMINI_API_KEY"):
+        return False, "Missing GEMINI_API_KEY"
+    model_hint = _env("GEMINI_MODEL") or DEFAULT_MODEL
+    return True, f"ok (model={model_hint})"
+
 
 
 # =========================================================
@@ -218,7 +293,7 @@ def get_gemini_features(player_name):
     prompt = build_prompt(player_name, news)
 
     # ---------- request ----------
-    text = ask_gemini(prompt)
+    text, _ = ask_gemini(prompt)
 
     data = parse_json(text)
 
@@ -238,6 +313,60 @@ def get_gemini_features(player_name):
     time.sleep(SLEEP)
 
     return data
+
+
+def get_pick_opinion(payload: dict) -> dict:
+    """Secondary Gemini opinion for an already-produced model pick.
+
+    Returns dict with:
+      {"stance": "agree|neutral|disagree", "confidence": 0..1, "short_reason": str}
+    """
+    configured, status_reason = gemini_is_configured()
+    neutral_resp = {"stance": "neutral", "confidence": 0.5, "short_reason": status_reason}
+    if not configured:
+        return neutral_resp
+
+    prompt = f"""
+You are a tennis betting assistant. Evaluate the model pick below as a SECONDARY opinion.
+
+Return ONLY JSON:
+{{
+  "stance": "agree" | "neutral" | "disagree",
+  "confidence": number 0..1,
+  "short_reason": "max 180 chars"
+}}
+
+Model pick context:
+{json.dumps(payload, ensure_ascii=False)}
+
+Rules:
+- Keep short_reason concise.
+- If context is weak/unclear, return neutral with confidence around 0.5.
+- No extra text, only JSON.
+"""
+
+    text, call_reason = ask_gemini(prompt)
+    if text is None:
+        return {"stance": "neutral", "confidence": 0.5, "short_reason": call_reason}
+
+    data = parse_json(text)
+    if not isinstance(data, dict):
+        return {"stance": "neutral", "confidence": 0.5, "short_reason": "Gemini returned non-JSON output"}
+
+    stance = str(data.get("stance", "neutral")).strip().lower()
+    if stance not in {"agree", "neutral", "disagree"}:
+        stance = "neutral"
+
+    try:
+        confidence = max(0.0, min(1.0, float(data.get("confidence", 0.5))))
+    except Exception:
+        confidence = 0.5
+
+    reason = str(data.get("short_reason", "")).strip() or "No extra context"
+    if len(reason) > 180:
+        reason = reason[:177] + "..."
+
+    return {"stance": stance, "confidence": confidence, "short_reason": reason}
 
 
 # =========================================================
