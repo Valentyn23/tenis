@@ -17,7 +17,7 @@ def _env(name: str) -> str:
     return str(os.getenv(name, "")).strip()
 
 
-MODEL = "gemini-1.5-flash"
+MODEL = "gemini-2.5-flash"
 
 TIMEOUT = 25
 CACHE_TTL = 60 * 60 * 6   # 6 часов
@@ -132,22 +132,46 @@ def ask_gemini(prompt):
 
     api_key = _env("GEMINI_API_KEY")
     if not api_key:
-        return None
+        return None, "Missing GEMINI_API_KEY"
+
+    url = f"https://generativelanguage.googleapis.com/v1/models/{MODEL}:generateContent?key={api_key}"
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2},
+    }
 
     try:
-        url = f"https://generativelanguage.googleapis.com/v1/models/{MODEL}:generateContent?key={api_key}"
-
-        body = {
-            "contents":[{"parts":[{"text":prompt}]}]
-        }
-
         r = requests.post(url, json=body, timeout=TIMEOUT)
-        r.raise_for_status()
+    except requests.RequestException as exc:
+        return None, f"Gemini request failed: {exc.__class__.__name__}"
 
-        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    if r.status_code != 200:
+        try:
+            payload = r.json()
+            msg = payload.get("error", {}).get("message") or payload.get("error", {}).get("status")
+        except Exception:
+            msg = r.text[:160]
+        return None, f"Gemini HTTP {r.status_code}: {msg or 'unknown error'}"
 
-    except:
-        return None
+    try:
+        payload = r.json()
+    except ValueError:
+        return None, "Gemini returned non-JSON response"
+
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        return None, "Gemini response has no candidates"
+
+    parts = candidates[0].get("content", {}).get("parts") or []
+    if not parts:
+        return None, "Gemini response has no text parts"
+
+    text = parts[0].get("text")
+    if not text:
+        return None, "Gemini response text is empty"
+
+    return text, "ok"
+
 
 
 def gemini_is_configured() -> tuple[bool, str]:
@@ -229,7 +253,7 @@ def get_gemini_features(player_name):
     prompt = build_prompt(player_name, news)
 
     # ---------- request ----------
-    text = ask_gemini(prompt)
+    text, _ = ask_gemini(prompt)
 
     data = parse_json(text)
 
@@ -281,10 +305,13 @@ Rules:
 - No extra text, only JSON.
 """
 
-    text = ask_gemini(prompt)
+    text, call_reason = ask_gemini(prompt)
+    if text is None:
+        return {"stance": "neutral", "confidence": 0.5, "short_reason": call_reason}
+
     data = parse_json(text)
     if not isinstance(data, dict):
-        return {"stance": "neutral", "confidence": 0.5, "short_reason": "Gemini API error or invalid JSON"}
+        return {"stance": "neutral", "confidence": 0.5, "short_reason": "Gemini returned non-JSON output"}
 
     stance = str(data.get("stance", "neutral")).strip().lower()
     if stance not in {"agree", "neutral", "disagree"}:
