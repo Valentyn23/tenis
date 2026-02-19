@@ -61,7 +61,7 @@ def make_predictor(mode: str, cfg: dict[str, Any]) -> Optional[Predictor]:
 
 
 def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], int]:
-    sports = list_tennis_sports(only_active=cfg["only_active_tennis"])
+    sports = list_tennis_sports(only_active=False)
     tennis_keys = [s["key"] for s in sports if "tennis" in s.get("key", "").lower()]
     extra_keys = [k.strip() for k in cfg.get("extra_tennis_keys", "").split(",") if k.strip()]
     if extra_keys:
@@ -190,8 +190,32 @@ with st.sidebar:
     bankroll = st.number_input("Банкролл", min_value=1.0, value=float(SETTINGS.bankroll), step=100.0)
     risk_profile = st.selectbox("Risk profile", options=list(PROFILE_DEFAULTS.keys()), index=list(PROFILE_DEFAULTS.keys()).index(SETTINGS.risk_profile if SETTINGS.risk_profile in PROFILE_DEFAULTS else "balanced"))
     max_events = st.number_input("Max events", min_value=1, max_value=300, value=int(SETTINGS.max_events), step=1)
-    only_active_tennis = st.toggle("Only active tennis tournaments", value=bool(SETTINGS.only_active_tennis))
-    extra_tennis_keys = st.text_input("Extra tennis keys (comma-separated)", value=SETTINGS.extra_tennis_keys)
+
+    discovered_keys = []
+    discover_error = None
+    try:
+        discovered_keys = [x.get("key") for x in list_tennis_sports(only_active=False) if x.get("key")]
+    except Exception as exc:
+        discover_error = str(exc)
+
+    if discover_error:
+        st.warning(f"Tournament key discovery failed: {discover_error}")
+    else:
+        st.caption(f"Discovered tennis keys: {len(discovered_keys)}")
+
+    default_extra = [k.strip() for k in SETTINGS.extra_tennis_keys.split(",") if k.strip()]
+    extra_keys_selected = st.multiselect(
+        "Add tournament keys manually",
+        options=discovered_keys,
+        default=[k for k in default_extra if k in discovered_keys],
+        help="Pick extra tournament keys to force-include in odds fetching.",
+    )
+
+    extra_tennis_keys = st.text_input(
+        "Extra tennis keys (comma-separated)",
+        value=",".join(extra_keys_selected) if extra_keys_selected else SETTINGS.extra_tennis_keys,
+    )
+
     use_calibration = st.toggle("Use calibration", value=bool(SETTINGS.use_calibration))
     gemini_pick_opinion = st.toggle("Gemini opinion", value=bool(SETTINGS.gemini_pick_opinion))
     if gemini_pick_opinion:
@@ -205,7 +229,6 @@ profile_defaults = PROFILE_DEFAULTS[risk_profile]
 cfg = {
     "regions": SETTINGS.regions,
     "max_events": int(max_events),
-    "only_active_tennis": bool(only_active_tennis),
     "extra_tennis_keys": extra_tennis_keys,
     "default_surface": SETTINGS.default_surface,
     "default_level": SETTINGS.default_level,
