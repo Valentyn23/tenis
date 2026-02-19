@@ -68,10 +68,10 @@ PROFILE_DEFAULTS = {
     "balanced": {
         "max_stake_pct": 0.02,
         "kelly_fraction": 0.35,
-        "min_edge": 0.03,
+        "min_edge": 0.02,
         "prob_floor": 0.08,
         "prob_ceil": 0.92,
-        "max_overround": 1.06,
+        "max_overround": 1.09,
         "soft_cap_edge": 0.25,
         "soft_cap_factor": 0.60,
     },

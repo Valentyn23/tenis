@@ -109,10 +109,10 @@ class Predictor:
         use_calibration: bool = True,
 
         # --- safety controls ---
-        prob_floor: float = 0.05,             # avoid 0.001/0.999 extremes
+        prob_floor: float = 0.08,             # avoid 0.001/0.999 extremes
         prob_ceil: float = 0.95,
         min_odds_allowed: float = 1.15,       # skip ultra-favorites (often bad liquidity)
-        max_odds_allowed: float = 12.0,       # skip extreme underdogs (often bad lines)
+        max_odds_allowed: float = 10.0,       # skip extreme underdogs (often bad lines)
         max_overround: float = 1.08,          # skip over-vig markets
         strict_mode_match: bool = False,      # fail if engine/model mode mismatch
         soft_cap_edge: float = 0.25,          # additional dampener above this edge
