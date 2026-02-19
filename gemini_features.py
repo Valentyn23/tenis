@@ -17,7 +17,8 @@ def _env(name: str) -> str:
     return str(os.getenv(name, "")).strip()
 
 
-MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-1.5-flash-latest"
+API_VERSIONS = ("v1", "v1beta")
 
 TIMEOUT = 25
 CACHE_TTL = 60 * 60 * 6   # 6 часов
@@ -25,6 +26,32 @@ SLEEP = 0.6
 
 CACHE_DIR = Path("cache")
 CACHE_DIR.mkdir(exist_ok=True)
+
+
+def _gemini_models() -> list[str]:
+    configured = _env("GEMINI_MODEL")
+    models = [configured] if configured else []
+    # fallback chain for compatibility across API versions/projects
+    models.extend(["gemini-1.5-flash-latest", "gemini-1.5-flash", "gemini-1.5-pro-latest"])
+
+    out = []
+    seen = set()
+    for m in models:
+        key = (m or "").strip()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(key)
+    if not out:
+        out = [DEFAULT_MODEL]
+    return out
+
+
+def _extract_http_error(response: requests.Response) -> str:
+    try:
+        payload = response.json()
+        return payload.get("error", {}).get("message") or payload.get("error", {}).get("status") or response.text[:160]
+    except Exception:
+        return response.text[:160]
 
 
 # =========================================================
@@ -134,50 +161,63 @@ def ask_gemini(prompt):
     if not api_key:
         return None, "Missing GEMINI_API_KEY"
 
-    url = f"https://generativelanguage.googleapis.com/v1/models/{MODEL}:generateContent?key={api_key}"
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.2},
     }
 
-    try:
-        r = requests.post(url, json=body, timeout=TIMEOUT)
-    except requests.RequestException as exc:
-        return None, f"Gemini request failed: {exc.__class__.__name__}"
+    last_reason = "Gemini call not attempted"
+    for model in _gemini_models():
+        for version in API_VERSIONS:
+            url = f"https://generativelanguage.googleapis.com/{version}/models/{model}:generateContent?key={api_key}"
 
-    if r.status_code != 200:
-        try:
-            payload = r.json()
-            msg = payload.get("error", {}).get("message") or payload.get("error", {}).get("status")
-        except Exception:
-            msg = r.text[:160]
-        return None, f"Gemini HTTP {r.status_code}: {msg or 'unknown error'}"
+            try:
+                r = requests.post(url, json=body, timeout=TIMEOUT)
+            except requests.RequestException as exc:
+                last_reason = f"Gemini request failed: {exc.__class__.__name__}"
+                continue
 
-    try:
-        payload = r.json()
-    except ValueError:
-        return None, "Gemini returned non-JSON response"
+            if r.status_code != 200:
+                msg = _extract_http_error(r) or "unknown error"
+                last_reason = f"Gemini HTTP {r.status_code} [{version}/{model}]: {msg}"
+                # keep trying known fallbacks for 404/400 capability mismatches
+                if r.status_code in {400, 404}:
+                    continue
+                # for auth/quota etc. retrying other models usually won't help
+                return None, last_reason
 
-    candidates = payload.get("candidates") or []
-    if not candidates:
-        return None, "Gemini response has no candidates"
+            try:
+                payload = r.json()
+            except ValueError:
+                last_reason = f"Gemini returned non-JSON response [{version}/{model}]"
+                continue
 
-    parts = candidates[0].get("content", {}).get("parts") or []
-    if not parts:
-        return None, "Gemini response has no text parts"
+            candidates = payload.get("candidates") or []
+            if not candidates:
+                last_reason = f"Gemini response has no candidates [{version}/{model}]"
+                continue
 
-    text = parts[0].get("text")
-    if not text:
-        return None, "Gemini response text is empty"
+            parts = candidates[0].get("content", {}).get("parts") or []
+            if not parts:
+                last_reason = f"Gemini response has no text parts [{version}/{model}]"
+                continue
 
-    return text, "ok"
+            text = parts[0].get("text")
+            if not text:
+                last_reason = f"Gemini response text is empty [{version}/{model}]"
+                continue
+
+            return text, f"ok [{version}/{model}]"
+
+    return None, last_reason
 
 
 
 def gemini_is_configured() -> tuple[bool, str]:
     if not _env("GEMINI_API_KEY"):
         return False, "Missing GEMINI_API_KEY"
-    return True, "ok"
+    model_hint = _env("GEMINI_MODEL") or DEFAULT_MODEL
+    return True, f"ok (model={model_hint})"
 
 
 

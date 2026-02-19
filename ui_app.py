@@ -18,7 +18,7 @@ if get_script_run_ctx is not None and get_script_run_ctx() is None:
 from odds_theoddsapi import (
     best_decimal_odds_from_event,
     fetch_h2h_odds_for_sport,
-    list_active_tennis_sports,
+    list_tennis_sports,
 )
 from predictor import Predictor
 from config_shared import infer_level_from_sport_key, infer_mode_from_sport_key
@@ -61,8 +61,17 @@ def make_predictor(mode: str, cfg: dict[str, Any]) -> Optional[Predictor]:
 
 
 def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], int]:
-    sports = list_active_tennis_sports()
+    sports = list_tennis_sports(only_active=cfg["only_active_tennis"])
     tennis_keys = [s["key"] for s in sports if "tennis" in s.get("key", "").lower()]
+    extra_keys = [k.strip() for k in cfg.get("extra_tennis_keys", "").split(",") if k.strip()]
+    if extra_keys:
+        merged = []
+        seen = set()
+        for k in tennis_keys + extra_keys:
+            if k not in seen:
+                seen.add(k)
+                merged.append(k)
+        tennis_keys = merged
 
     required_modes = {m for m in (infer_mode_from_sport_key(k) for k in tennis_keys) if m in {"ATP", "WTA"}}
     predictors: dict[str, Predictor] = {}
@@ -181,6 +190,8 @@ with st.sidebar:
     bankroll = st.number_input("Банкролл", min_value=1.0, value=float(SETTINGS.bankroll), step=100.0)
     risk_profile = st.selectbox("Risk profile", options=list(PROFILE_DEFAULTS.keys()), index=list(PROFILE_DEFAULTS.keys()).index(SETTINGS.risk_profile if SETTINGS.risk_profile in PROFILE_DEFAULTS else "balanced"))
     max_events = st.number_input("Max events", min_value=1, max_value=300, value=int(SETTINGS.max_events), step=1)
+    only_active_tennis = st.toggle("Only active tennis tournaments", value=bool(SETTINGS.only_active_tennis))
+    extra_tennis_keys = st.text_input("Extra tennis keys (comma-separated)", value=SETTINGS.extra_tennis_keys)
     use_calibration = st.toggle("Use calibration", value=bool(SETTINGS.use_calibration))
     gemini_pick_opinion = st.toggle("Gemini opinion", value=bool(SETTINGS.gemini_pick_opinion))
     if gemini_pick_opinion:
@@ -194,6 +205,8 @@ profile_defaults = PROFILE_DEFAULTS[risk_profile]
 cfg = {
     "regions": SETTINGS.regions,
     "max_events": int(max_events),
+    "only_active_tennis": bool(only_active_tennis),
+    "extra_tennis_keys": extra_tennis_keys,
     "default_surface": SETTINGS.default_surface,
     "default_level": SETTINGS.default_level,
     "default_round": SETTINGS.default_round,

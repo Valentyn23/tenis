@@ -8,6 +8,8 @@ from dataclasses import dataclass
 class RuntimeSettings:
     regions: str
     max_events: int
+    only_active_tennis: bool
+    extra_tennis_keys: str
     default_surface: str
     default_level: float
     default_round: float
@@ -43,7 +45,7 @@ class RuntimeSettings:
 
     def summary(self) -> str:
         return (
-            f"regions={self.regions} max_events={self.max_events} bankroll={self.bankroll} "
+            f"regions={self.regions} max_events={self.max_events} only_active_tennis={self.only_active_tennis} bankroll={self.bankroll} "
             f"currency={self.currency} "
             f"risk_profile={self.risk_profile} min_edge={self.min_edge} max_stake_pct={self.max_stake_pct} "
             f"kelly_fraction={self.kelly_fraction} prob=[{self.prob_floor},{self.prob_ceil}] "
@@ -59,17 +61,17 @@ PROFILE_DEFAULTS = {
         "min_edge": 0.035,
         "prob_floor": 0.10,
         "prob_ceil": 0.90,
-        "max_overround": 1.07,
+        "max_overround": 1.05,
         "soft_cap_edge": 0.20,
         "soft_cap_factor": 0.50,
     },
     "balanced": {
         "max_stake_pct": 0.02,
         "kelly_fraction": 0.35,
-        "min_edge": 0.02,
+        "min_edge": 0.03,
         "prob_floor": 0.08,
         "prob_ceil": 0.92,
-        "max_overround": 1.09,
+        "max_overround": 1.06,
         "soft_cap_edge": 0.25,
         "soft_cap_factor": 0.60,
     },
@@ -79,7 +81,7 @@ PROFILE_DEFAULTS = {
         "min_edge": 0.02,
         "prob_floor": 0.05,
         "prob_ceil": 0.95,
-        "max_overround": 1.09,
+        "max_overround": 1.08,
         "soft_cap_edge": 0.30,
         "soft_cap_factor": 0.75,
     },
@@ -100,6 +102,8 @@ def load_runtime_settings() -> RuntimeSettings:
     return RuntimeSettings(
         regions=os.getenv("ODDS_REGIONS", "eu"),
         max_events=int(os.getenv("MAX_EVENTS", "30")),
+        only_active_tennis=_env_bool("ONLY_ACTIVE_TENNIS", True),
+        extra_tennis_keys=os.getenv("EXTRA_TENNIS_KEYS", "").strip(),
         default_surface=os.getenv("DEFAULT_SURFACE", "Hard"),
         default_level=float(os.getenv("DEFAULT_LEVEL", "1")),
         default_round=float(os.getenv("DEFAULT_ROUND", "1")),

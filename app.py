@@ -14,7 +14,7 @@ except Exception:  # pragma: no cover - runtime guard
 
 load_dotenv()
 
-from odds_theoddsapi import list_active_tennis_sports, fetch_h2h_odds_for_sport, best_decimal_odds_from_event
+from odds_theoddsapi import list_tennis_sports, fetch_h2h_odds_for_sport, best_decimal_odds_from_event
 from predictor import Predictor
 from config_shared import infer_level_from_sport_key, infer_mode_from_sport_key
 from settings import load_runtime_settings
@@ -91,11 +91,22 @@ def save_session_report(report: dict) -> Optional[Path]:
 def main():
     print(f"Runtime settings: {SETTINGS.summary()}")
 
-    sports = list_active_tennis_sports()
+    sports = list_tennis_sports(only_active=SETTINGS.only_active_tennis)
     print(f"Found active tennis sports: {len(sports)}")
 
     tennis_keys = [s["key"] for s in sports if "tennis" in (s.get("key", "").lower())]
-    print("Tennis keys:", tennis_keys[:10])
+
+    extra_keys = [k.strip() for k in SETTINGS.extra_tennis_keys.split(",") if k.strip()]
+    if extra_keys:
+        merged = []
+        seen = set()
+        for k in tennis_keys + extra_keys:
+            if k not in seen:
+                seen.add(k)
+                merged.append(k)
+        tennis_keys = merged
+
+    print("Tennis keys:", tennis_keys[:20])
 
     required_modes = {m for m in (infer_mode_from_sport_key(k) for k in tennis_keys) if m in ("ATP", "WTA")}
     preflight = validate_artifacts(required_modes)

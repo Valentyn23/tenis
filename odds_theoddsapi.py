@@ -22,10 +22,10 @@ def _get(url: str, params: dict) -> Any:
     return r.json()
 
 
-def list_active_tennis_sports() -> List[Dict[str, Any]]:
+def list_tennis_sports(only_active: bool = True) -> List[Dict[str, Any]]:
     """
-    Возвращает список активных sport keys, где key содержит tennis.
-    GET /v4/sports — бесплатный, не тратит квоту. :contentReference[oaicite:4]{index=4}
+    Возвращает список tennis sport keys.
+    Если only_active=True, оставляет только активные рынки (active=true).
     """
     if not THE_ODDS_API_KEY:
         raise OddsAPIError("Missing THE_ODDS_API_KEY in env/.env")
@@ -39,9 +39,14 @@ def list_active_tennis_sports() -> List[Dict[str, Any]]:
         title = (s.get("title") or "").lower()
         group = (s.get("group") or "").lower()
         if "tennis" in key or "tennis" in title or "tennis" in group:
-            if s.get("active") is True:
+            if (not only_active) or (s.get("active") is True):
                 tennis.append(s)
     return tennis
+
+
+def list_active_tennis_sports() -> List[Dict[str, Any]]:
+    """Backward-compatible wrapper."""
+    return list_tennis_sports(only_active=True)
 
 
 def fetch_h2h_odds_for_sport(

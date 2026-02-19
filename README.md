@@ -41,6 +41,8 @@ STRICT_MODE_MATCH=1 python app.py
 Core:
 - `ODDS_REGIONS` (default `eu`)
 - `MAX_EVENTS` (default `30`)
+- `ONLY_ACTIVE_TENNIS` (default `1`) — set `0` to fetch all tennis sport keys, not only active ones
+- `EXTRA_TENNIS_KEYS` (optional) — comma-separated manual keys to force include
 - `STRICT_MODE_MATCH` (default `1`)
 
 State paths:
@@ -62,6 +64,7 @@ Money / ledger:
 
 Gemini:
 - `GEMINI_PICK_OPINION` (default `0`) — ask Gemini for secondary opinion on each BET pick
+- `GEMINI_MODEL` (optional) — force model name, e.g. `gemini-1.5-flash-latest`
 
 
 ## Streamlit UI (MVP)
@@ -75,7 +78,7 @@ streamlit run ui_app.py
 Do not start it with `python ui_app.py` — Streamlit apps require `streamlit run`.
 
 UI includes:
-- settings panel (bankroll, risk profile, max events, calibration toggle),
+- settings panel (bankroll, risk profile, max events, active/all tournaments, manual tournament keys, calibration toggle),
 - one-click run button,
 - recommendations table with color highlights (green = BET, red = NO_BET/SKIP),
 - Gemini secondary opinion columns,
@@ -111,6 +114,8 @@ Set API key in project `.env` and restart Streamlit:
 ```bash
 GEMINI_API_KEY=your_key_here
 GEMINI_PICK_OPINION=1
+# optional override
+GEMINI_MODEL=gemini-1.5-flash-latest
 ```
 
 Then run:
