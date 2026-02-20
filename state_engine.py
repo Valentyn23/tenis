@@ -8,6 +8,8 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Optional
 
+from config_shared import dynamic_k as shared_dynamic_k, normalize_mode
+
 
 # =========================================================
 # CONFIG
@@ -63,6 +65,11 @@ def decay(value: float, days: int, half_life: float) -> float:
     return float(value) * math.exp(-lam * float(days))
 
 
+def bounded_signal_diff(x: float, scale: float = 8.0) -> float:
+    """Bound very large activity/fatigue differences to stable range [-1, 1]."""
+    return math.tanh(float(x) / float(scale))
+
+
 def surface_transition_penalty(last_surface: Optional[str], current_surface: str) -> float:
     """
     Penalty to BASE Elo when switching surfaces (simple heuristic).
@@ -107,7 +114,8 @@ class PlayerState:
 # ENGINE
 # =========================================================
 class StateEngine:
-    def __init__(self):
+    def __init__(self, mode: str = "ATP"):
+        self.mode = normalize_mode(mode)
         self.players = defaultdict(PlayerState)
         self.h2h = defaultdict(int)           # (A,B) -> wins of A vs B
         self.h2h_surface = defaultdict(int)   # (A,B,surface) -> wins of A vs B on surface
@@ -192,9 +200,9 @@ class StateEngine:
             "streak_diff": float(pA.streak - pB.streak),
 
             # fatigue/activity
-            "fatigue_diff": float(pA.fatigue - pB.fatigue),
-            "activity7_diff": float(pA.activity7 - pB.activity7),
-            "activity14_diff": float(pA.activity14 - pB.activity14),
+            "fatigue_diff": float(bounded_signal_diff(pA.fatigue - pB.fatigue, scale=6.0)),
+            "activity7_diff": float(bounded_signal_diff(pA.activity7 - pB.activity7, scale=8.0)),
+            "activity14_diff": float(bounded_signal_diff(pA.activity14 - pB.activity14, scale=10.0)),
 
             # experience/rest
             "rest_days_diff": float(self._rest_days(pA, date_dt) - self._rest_days(pB, date_dt)),
@@ -245,7 +253,11 @@ class StateEngine:
         W = self.players[winner]
         L = self.players[loser]
 
-        K = dynamic_k(W.matches, level, rnd)
+        # decay to pre-match state before applying current match updates
+        self._apply_decay(W, date_dt)
+        self._apply_decay(L, date_dt)
+
+        K = shared_dynamic_k(W.matches, level, rnd, mode=self.mode)
 
         # base Elo update
         W.elo, L.elo = update_elo(W.elo, L.elo, 1.0, K)

@@ -6,13 +6,15 @@ from datetime import datetime
 
 from state_engine import StateEngine
 from state_persistence import save_engine
+from config_shared import normalize_mode, tournament_level_from_text
 
 # =========================================================
 # CONFIG
 # =========================================================
-DATA_FOLDER = "data"
+MODE = normalize_mode(os.getenv("MODE", "ATP"))
+DATA_FOLDER = os.getenv("DATA_FOLDER_OVERRIDE", os.path.join("data", MODE))
 EXTENSIONS = ("*.xlsx", "*.xls", "*.csv")
-STATE_PATH = "state/engine_state.pkl"
+STATE_PATH = os.getenv("STATE_PATH", f"state/engine_state_{MODE.lower()}.pkl")
 
 
 # =========================================================
@@ -23,10 +25,6 @@ def norm_col(c: str) -> str:
 
 
 def find_col(colmap: dict, candidates: list[str]):
-    """
-    colmap: {normalized_name: original_name}
-    candidates: possible normalized names
-    """
     for cand in candidates:
         cand_n = norm_col(cand)
         if cand_n in colmap:
@@ -35,65 +33,41 @@ def find_col(colmap: dict, candidates: list[str]):
 
 
 def parse_date(x):
-    """
-    Supports:
-    - datetime
-    - excel serial dates
-    - int YYYYMMDD
-    - strings 'YYYY-MM-DD', 'YYYYMMDD', etc.
-    """
     if x is None or (isinstance(x, float) and pd.isna(x)) or (isinstance(x, str) and not x.strip()):
         return None
 
     if isinstance(x, datetime):
         return x
 
-    # pandas Timestamp
     try:
         if hasattr(x, "to_pydatetime"):
             return x.to_pydatetime()
-    except:
+    except Exception:
         pass
 
-    # numeric like 20240131 or 20240131.0
     if isinstance(x, (int, float)) and not pd.isna(x):
         xi = int(x)
-        # likely YYYYMMDD
         if 19000101 <= xi <= 21001231:
             s = str(xi)
             try:
                 return datetime(int(s[0:4]), int(s[4:6]), int(s[6:8]))
-            except:
+            except Exception:
                 pass
 
-    # try pandas parse
     try:
         dt = pd.to_datetime(x, errors="coerce")
         if pd.isna(dt):
             return None
         return dt.to_pydatetime()
-    except:
+    except Exception:
         return None
 
 
 def level_from_series(series_or_tier):
-    s = "" if series_or_tier is None else str(series_or_tier).lower()
-
-    # ATP: Series can contain Grand Slam / Masters / ATP250/500
-    # WTA: Tier often indicates Premier/International/Grand Slam etc.
-    if "grand" in s or "slam" in s:
-        return 3.0
-    if "masters" in s or "1000" in s:
-        return 2.0
-    if "500" in s or "premier" in s:
-        return 1.7
-    if "250" in s or "international" in s:
-        return 1.3
-    return 1.0
+    return tournament_level_from_text(series_or_tier, default=1.0)
 
 
 def parse_round(rnd):
-    # Round could be "F", "SF", "QF", "R16" etc. We'll map roughly.
     if rnd is None or (isinstance(rnd, float) and pd.isna(rnd)):
         return 1.0
     s = str(rnd).strip().upper()
@@ -118,10 +92,9 @@ def parse_round(rnd):
     if s in mapping:
         return mapping[s]
 
-    # if numeric
     try:
         return float(s)
-    except:
+    except Exception:
         return 1.0
 
 
@@ -129,7 +102,6 @@ def parse_surface(surface):
     if surface is None or (isinstance(surface, float) and pd.isna(surface)):
         return "Hard"
     s = str(surface).strip().capitalize()
-    # normalize common variants
     if s.lower() in ("hard", "h"):
         return "Hard"
     if s.lower() in ("clay", "c"):
@@ -176,7 +148,6 @@ def extract_matches(path: str, df: pd.DataFrame):
     if df is None or df.empty:
         return []
 
-    # build normalized column map
     colmap = {norm_col(c): c for c in df.columns}
 
     col_w = find_col(colmap, ["winner", "w", "player1", "p1", "player 1"])
@@ -187,8 +158,10 @@ def extract_matches(path: str, df: pd.DataFrame):
     col_series = find_col(colmap, ["series", "tier"])
 
     if not col_w or not col_l or not col_date:
-        print(f"[WARN] {os.path.basename(path)}: missing essential columns "
-              f"(winner={col_w}, loser={col_l}, date={col_date}) -> 0 matches")
+        print(
+            f"[WARN] {os.path.basename(path)}: missing essential columns "
+            f"(winner={col_w}, loser={col_l}, date={col_date}) -> 0 matches"
+        )
         return []
 
     matches = []
@@ -206,14 +179,16 @@ def extract_matches(path: str, df: pd.DataFrame):
         rnd = parse_round(r.get(col_round, 1))
         level = level_from_series(r.get(col_series, ""))
 
-        matches.append({
-            "winner": str(w).strip(),
-            "loser": str(l).strip(),
-            "surface": surface,
-            "round": float(rnd),
-            "level": float(level),
-            "date": d,
-        })
+        matches.append(
+            {
+                "winner": str(w).strip(),
+                "loser": str(l).strip(),
+                "surface": surface,
+                "round": float(rnd),
+                "level": float(level),
+                "date": d,
+            }
+        )
 
     return matches
 
@@ -229,7 +204,6 @@ def build_match_history():
         per_file.append((path, len(ms)))
         all_matches.extend(ms)
 
-    # diagnostics
     print("\n=== MATCHES PER FILE (top 30) ===")
     for p, n in sorted(per_file, key=lambda x: x[1], reverse=True)[:30]:
         print(f"{n:7d}  {p}")
@@ -245,11 +219,7 @@ def build_match_history():
 
     all_matches.sort(key=lambda x: x["date"])
 
-    unique_players = {
-        p
-        for m in all_matches
-        for p in (m["winner"], m["loser"])
-    }
+    unique_players = {p for m in all_matches for p in (m["winner"], m["loser"])}
     print("\n=== DATASET SUMMARY ===")
     print(f"Matches parsed: {len(all_matches)}")
     print(f"Unique players: {len(unique_players)}")
@@ -267,7 +237,7 @@ def warmup_engine():
     matches = build_match_history()
     print("\nTotal matches:", len(matches))
 
-    engine = StateEngine()
+    engine = StateEngine(mode=MODE)
 
     for i, m in enumerate(matches):
         engine.update_after_match(
@@ -283,17 +253,16 @@ def warmup_engine():
 
     print("Warmup complete.")
     total_player_matches = sum(st.matches for st in engine.players.values())
-    # each match increments counter for both winner and loser
     inferred_matches = total_player_matches / 2.0
     print(f"Engine players: {len(engine.players)}")
     print(f"Engine inferred matches: {inferred_matches:.0f}")
     return engine
 
 
-# =========================================================
-# MAIN
-# =========================================================
 if __name__ == "__main__":
+    print(f"Warmup MODE: {MODE}")
+    print(f"Warmup DATA_FOLDER: {DATA_FOLDER}")
+    print(f"Warmup STATE_PATH: {STATE_PATH}")
     engine = warmup_engine()
 
     print("\nExample player states:")

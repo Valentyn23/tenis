@@ -12,6 +12,45 @@ BASE_URL = "https://api.the-odds-api.com"
 TIMEOUT = 25
 
 
+SUPPORTED_TENNIS_KEYS = [
+    "tennis_atp_aus_open_singles",
+    "tennis_atp_canadian_open",
+    "tennis_atp_china_open",
+    "tennis_atp_cincinnati_open",
+    "tennis_atp_dubai",
+    "tennis_atp_french_open",
+    "tennis_atp_indian_wells",
+    "tennis_atp_italian_open",
+    "tennis_atp_madrid_open",
+    "tennis_atp_miami_open",
+    "tennis_atp_monte_carlo_masters",
+    "tennis_atp_paris_masters",
+    "tennis_atp_qatar_open",
+    "tennis_atp_shanghai_masters",
+    "tennis_atp_us_open",
+    "tennis_atp_wimbledon",
+    "tennis_wta_aus_open_singles",
+    "tennis_wta_canadian_open",
+    "tennis_wta_china_open",
+    "tennis_wta_cincinnati_open",
+    "tennis_wta_dubai",
+    "tennis_wta_french_open",
+    "tennis_wta_indian_wells",
+    "tennis_wta_italian_open",
+    "tennis_wta_madrid_open",
+    "tennis_wta_miami_open",
+    "tennis_wta_qatar_open",
+    "tennis_wta_us_open",
+    "tennis_wta_wimbledon",
+    "tennis_wta_wuhan_open",
+]
+
+
+def list_supported_tennis_keys() -> List[str]:
+    """Static list of tennis tournament keys from The Odds API docs."""
+    return list(SUPPORTED_TENNIS_KEYS)
+
+
 class OddsAPIError(RuntimeError):
     pass
 
@@ -22,10 +61,10 @@ def _get(url: str, params: dict) -> Any:
     return r.json()
 
 
-def list_active_tennis_sports() -> List[Dict[str, Any]]:
+def list_tennis_sports(only_active: bool = True) -> List[Dict[str, Any]]:
     """
-    Возвращает список активных sport keys, где key содержит tennis.
-    GET /v4/sports — бесплатный, не тратит квоту. :contentReference[oaicite:4]{index=4}
+    Возвращает список tennis sport keys.
+    Если only_active=True, оставляет только активные рынки (active=true).
     """
     if not THE_ODDS_API_KEY:
         raise OddsAPIError("Missing THE_ODDS_API_KEY in env/.env")
@@ -39,9 +78,14 @@ def list_active_tennis_sports() -> List[Dict[str, Any]]:
         title = (s.get("title") or "").lower()
         group = (s.get("group") or "").lower()
         if "tennis" in key or "tennis" in title or "tennis" in group:
-            if s.get("active") is True:
+            if (not only_active) or (s.get("active") is True):
                 tennis.append(s)
     return tennis
+
+
+def list_active_tennis_sports() -> List[Dict[str, Any]]:
+    """Backward-compatible wrapper."""
+    return list_tennis_sports(only_active=True)
 
 
 def fetch_h2h_odds_for_sport(
