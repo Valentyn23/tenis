@@ -158,4 +158,5 @@ def best_decimal_odds_from_event(event: Dict[str, Any]) -> Optional[Dict[str, An
         "bookmakers_used": [books_used[home], books_used[away]],
         "sport_key": event.get("sport_key"),
         "id": event.get("id"),
+        "source": "TheOddsAPI",
     }
