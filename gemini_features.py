@@ -17,7 +17,7 @@ def _env(name: str) -> str:
     return str(os.getenv(name, "")).strip()
 
 
-DEFAULT_MODEL = "gemini-1.5-flash-latest"
+DEFAULT_MODEL = "gemini-2.5-flash"
 API_VERSIONS = ("v1", "v1beta")
 
 TIMEOUT = 25
@@ -29,21 +29,13 @@ CACHE_DIR.mkdir(exist_ok=True)
 
 
 def _gemini_models() -> list[str]:
+    # 1. Проверяем, задана ли модель вручную в .env
     configured = _env("GEMINI_MODEL")
-    models = [configured] if configured else []
-    # fallback chain for compatibility across API versions/projects
-    models.extend(["gemini-1.5-flash-latest", "gemini-1.5-flash", "gemini-1.5-pro-latest"])
+    if configured:
+        return [configured]
 
-    out = []
-    seen = set()
-    for m in models:
-        key = (m or "").strip()
-        if key and key not in seen:
-            seen.add(key)
-            out.append(key)
-    if not out:
-        out = [DEFAULT_MODEL]
-    return out
+    # 2. Если нет — используем самую актуальную бесплатную модель
+    return ["gemini-2.5-flash"]
 
 
 def _extract_http_error(response: requests.Response) -> str:
