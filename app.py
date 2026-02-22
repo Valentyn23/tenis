@@ -14,6 +14,17 @@ except Exception:  # pragma: no cover - runtime guard
 
 load_dotenv()
 
+# =====================================================
+# AUTO-UPDATE: Подтягиваем новые матчи и обновляем стейты при запуске
+# =====================================================
+try:
+    from auto_update import auto_update_on_startup
+    UPDATE_RESULT = auto_update_on_startup()
+except Exception as e:
+    print(f"[WARN] Auto-update failed: {e}")
+    UPDATE_RESULT = {"enabled": False, "error": str(e)}
+# =====================================================
+
 from odds_theoddsapi import list_tennis_sports, fetch_h2h_odds_for_sport, best_decimal_odds_from_event
 from predictor import Predictor
 from config_shared import infer_level_from_sport_key, infer_mode_from_sport_key
