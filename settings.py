@@ -58,7 +58,7 @@ PROFILE_DEFAULTS = {
     "conservative": {
         "max_stake_pct": 0.015,
         "kelly_fraction": 0.25,
-        "min_edge": 0.035,
+        "min_edge": 0.6,
         "prob_floor": 0.10,
         "prob_ceil": 0.90,
         "max_overround": 1.05,
@@ -68,7 +68,7 @@ PROFILE_DEFAULTS = {
     "balanced": {
         "max_stake_pct": 0.02,
         "kelly_fraction": 0.35,
-        "min_edge": 0.02,
+        "min_edge": 0.05,
         "prob_floor": 0.08,
         "prob_ceil": 0.92,
         "max_overround": 1.09,

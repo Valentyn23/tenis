@@ -461,7 +461,7 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
     # Risk multiplier for different sources
     SOURCE_RISK_MULTIPLIER = {
         "TheOddsAPI": 1.0,  # 100% от расчетной ставки
-        "FlashScore": 0.5,  # 50% от расчетной ставки (более рисковые)
+        "FlashScore": 1.0,  # 50% от расчетной ставки (более рисковые)
     }
 
     records = []

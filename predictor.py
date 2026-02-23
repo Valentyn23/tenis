@@ -39,7 +39,9 @@ def to_dataset_name(full_name: str) -> str:
     """
     Convert 'Carlos Alcaraz' -> 'Alcaraz C.'
     Convert 'Elina Svitolina' -> 'Svitolina E.'
-    Works for most ATP/WTA historical datasets where players are stored as "Lastname F."
+    Convert 'Pablo Carreno Busta' -> 'Carreno Busta P.' (составные фамилии)
+    Convert 'Jan-Lennard Struff' -> 'Struff J-L.' (двойные имена)
+    Convert 'Giovanni Mpetshi Perricard' -> 'Mpetshi Perricard G.'
     """
     if not full_name:
         return full_name
@@ -53,11 +55,35 @@ def to_dataset_name(full_name: str) -> str:
         return parts[0]
 
     first = parts[0]
-    last = parts[-1]
 
+    # Специальные случаи составных фамилий
+    special_surnames = {
+        "carreno": "Carreno Busta",  # Pablo Carreno Busta
+        "mpetshi": "Mpetshi Perricard",  # Giovanni Mpetshi Perricard
+        "van de": "Van de Zandschulp",  # Botic Van de Zandschulp
+        "de minaur": "De Minaur",  # Alex De Minaur
+    }
+
+    name_lower = full_name.lower()
+    for key, surname in special_surnames.items():
+        if key in name_lower:
+            initial = first[0].upper() if first else ""
+            # Проверяем двойное имя (Jan-Lennard)
+            if "-" in first:
+                initials = "-".join([p[0].upper() for p in first.split("-")])
+                return f"{surname} {initials}."
+            return f"{surname} {initial}."
+
+    # Обработка двойных имён (Jan-Lennard -> J-L.)
+    if "-" in first:
+        initials = "-".join([p[0].upper() for p in first.split("-")])
+        last = parts[-1]
+        return f"{last} {initials}."
+
+    # Стандартный случай
+    last = parts[-1]
     initial = first[0].upper() if first else ""
     return f"{last} {initial}."
-
 
 # =========================================================
 # UTILS
@@ -103,16 +129,16 @@ class Predictor:
         bankroll: float = 1000.0,
         max_stake_pct: float = 0.03,         # cap per bet (e.g. 0.03 = 3%)
         kelly_fraction_used: float = 0.5,     # 0.5 = half-Kelly
-        min_edge: float = 0.015,              # only bet if edge >= 1.5%
+        min_edge: float = 0.005,              # only bet if edge >= 1.5%
         state_path: str = "state/engine_state.pkl",
         debug: bool = False,
         use_calibration: bool = True,
 
         # --- safety controls ---
         prob_floor: float = 0.08,             # avoid 0.001/0.999 extremes
-        prob_ceil: float = 0.95,
+        prob_ceil: float = 0.92,
         min_odds_allowed: float = 1.15,       # skip ultra-favorites (often bad liquidity)
-        max_odds_allowed: float = 10.0,       # skip extreme underdogs (often bad lines)
+        max_odds_allowed: float = 7,       # skip extreme underdogs (often bad lines)
         max_overround: float = 1.08,          # skip over-vig markets
         strict_mode_match: bool = False,      # fail if engine/model mode mismatch
         soft_cap_edge: float = 0.25,          # additional dampener above this edge
