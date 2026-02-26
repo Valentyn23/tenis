@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import app
 import pandas as pd
 import streamlit as st
-
+from predictor import Predictor, to_dataset_name
 try:
     from streamlit.runtime.scriptrunner import get_script_run_ctx
 except Exception:
@@ -388,14 +388,26 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
             )
             for fs_event in flashscore_events:
                 is_duplicate = False
+                # Normalize FlashScore player names for comparison
+                fs_a_norm = to_dataset_name(fs_event["playerA"]).lower()
+                fs_b_norm = to_dataset_name(fs_event["playerB"]).lower()
+
                 for existing in events:
-                    if (existing["playerA"] == fs_event["playerA"] and
-                            existing["playerB"] == fs_event["playerB"]):
+                    # Normalize existing event player names for comparison
+                    ex_a_norm = to_dataset_name(existing["playerA"]).lower()
+                    ex_b_norm = to_dataset_name(existing["playerB"]).lower()
+
+                    # Check both orderings (A vs B or B vs A)
+                    if (ex_a_norm == fs_a_norm and ex_b_norm == fs_b_norm):
                         is_duplicate = True
+                        print(f"[DEDUP] Skipping FlashScore duplicate: {fs_event['playerA']} vs {fs_event['playerB']} "
+                              f"(matches OddsAPI: {existing['playerA']} vs {existing['playerB']})")
                         break
-                    if (existing["playerA"] == fs_event["playerB"] and
-                            existing["playerB"] == fs_event["playerA"]):
+                    if (ex_a_norm == fs_b_norm and ex_b_norm == fs_a_norm):
                         is_duplicate = True
+                        print(
+                            f"[DEDUP] Skipping FlashScore duplicate (reversed): {fs_event['playerA']} vs {fs_event['playerB']} "
+                            f"(matches OddsAPI: {existing['playerA']} vs {existing['playerB']})")
                         break
 
                 if not is_duplicate:

@@ -1,10 +1,11 @@
 timestamp_utc,event_id,tour_mode,commence_time,playerA,playerB,pick,decision,reason,oddsA,oddsB,pick_odds,prob_A_win,pick_edge,stake,currency,result,pnl
 2026-02-23T17:04:54.940676+00:00,manual_7_1771866294.940529,ATP,,Arthur Fils,Jiri Lehecka,Arthur Fils,BET_A,"edge=15.4%, prob=63.5%, kelly=10.4%",2.08,1.86,2.08,0.6345810890197754,0.15381185825054466,20.0,UAH,win,26.0
-2026-02-25T19:18:19.696234+00:00,manual_0_1772047099.695599,ATP,,Daniil Medvedev,Jenson Brooksby,Jenson Brooksby,BET_B,"edge=5.1%, prob=28.4%, kelly=2.3%",1.27,4.3,4.3,0.7161125540733337,0.05132930639178254,20.0,UAH,,
+2026-02-25T19:18:19.696234+00:00,manual_0_1772047099.695599,ATP,,Daniil Medvedev,Jenson Brooksby,Jenson Brooksby,BET_B,"edge=5.1%, prob=28.4%, kelly=2.3%",1.27,4.3,4.3,0.7161125540733337,0.05132930639178254,20.0,UAH,loss,-20.0
 2026-02-25T19:18:19.696234+00:00,manual_1_1772047099.695731,ATP,,Felix Auger-Aliassime,Jiri Lehecka,Jiri Lehecka,BET_B,"edge=22.4%, prob=61.6%, kelly=12.9%",1.59,2.55,2.55,0.3835616409778595,0.2242814962770424,20.0,UAH,,
 2026-02-25T19:18:19.696234+00:00,manual_3_1772047099.695836,ATP,,Prizmic D.,Gaubas V.,Gaubas V.,BET_B,"edge=15.5%, prob=48.1%, kelly=8.0%",1.38,3.06,3.06,0.5185589790344238,0.15464363534466113,20.0,UAH,win,40.0
 2026-02-25T19:18:19.696234+00:00,manual_4_1772047099.695933,WTA,,Bartunkova N.,Townsend T.,Townsend T.,BET_B,"edge=6.7%, prob=53.7%, kelly=4.4%",1.72,2.13,2.13,0.4634551405906677,0.0670612913342149,20.0,UAH,win,24.6
-2026-02-26T08:29:39.923276+00:00,manual_2_1772094579.922533,ATP,,Andrey Rublev,Arthur Rinderknech,Arthur Rinderknech,BET_B,"edge=6.0%, prob=31.6%, kelly=2.8%",1.33,3.9,3.9,0.6837607026100159,0.05982904097972769,20.0,UAH,,
+2026-02-26T08:29:39.923276+00:00,manual_2_1772094579.922533,ATP,,Andrey Rublev,Arthur Rinderknech,Arthur Rinderknech,BET_B,"edge=6.0%, prob=31.6%, kelly=2.8%",1.33,3.9,3.9,0.6837607026100159,0.05982904097972769,20.0,UAH,loss,-20.0
 2026-02-26T08:29:39.923276+00:00,manual_10_1772094579.922891,ATP,,Garin C.,Baez S.,Garin C.,BET_A,"edge=6.5%, prob=42.7%, kelly=3.5%",2.76,1.45,2.76,0.4268617033958435,0.0645428628161333,20.0,UAH,,
-2026-02-26T08:29:39.923276+00:00,manual_11_1772094579.922994,WTA,,Zakharova A.,Krueger A.,Zakharova A.,BET_A,"edge=5.9%, prob=49.8%, kelly=3.7%",2.28,1.64,2.28,0.4976598918437958,0.05906340061572557,20.0,UAH,,
+2026-02-26T08:29:39.923276+00:00,manual_11_1772094579.922994,WTA,,Zakharova A.,Krueger A.,Zakharova A.,BET_A,"edge=5.9%, prob=49.8%, kelly=3.7%",2.28,1.64,2.28,0.4976598918437958,0.05906340061572557,20.0,UAH,loss,-20.0
 2026-02-26T08:29:39.923276+00:00,manual_14_1772094579.923095,WTA,,Bouzas Maneiro J.,Frech M.,Frech M.,BET_B,"edge=12.8%, prob=62.1%, kelly=8.9%",1.78,2.03,2.03,0.3790760934352875,0.12831306912628881,20.0,UAH,,
+2026-02-26T13:52:58.404429+00:00,manual_18_1772113978.404289,ATP,,Lajal M.,Herbert P.,Herbert P.,BET_B,"edge=13.3%, prob=56.0%, kelly=8.1%",1.53,2.34,2.34,0.4399999976158142,0.1326495750337584,20.0,UAH,win,27.6

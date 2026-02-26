@@ -42,6 +42,8 @@ def to_dataset_name(full_name: str) -> str:
     Convert 'Pablo Carreno Busta' -> 'Carreno Busta P.' (составные фамилии)
     Convert 'Jan-Lennard Struff' -> 'Struff J-L.' (двойные имена)
     Convert 'Giovanni Mpetshi Perricard' -> 'Mpetshi Perricard G.'
+
+    Also handles already-normalized names like 'Auger-Aliassime F.' -> returns as-is
     """
     if not full_name:
         return full_name
@@ -54,6 +56,13 @@ def to_dataset_name(full_name: str) -> str:
     if len(parts) == 1:
         return parts[0]
 
+    # Check if already in dataset format: "Surname I." or "Surname I-I."
+    # Pattern: last part is 1-3 chars ending with "." (like "F.", "J-L.", "A.")
+    last_part = parts[-1]
+    if len(last_part) <= 4 and last_part.endswith('.') and len(parts) >= 2:
+        # Already normalized - just clean it up
+        return s
+
     first = parts[0]
 
     # Специальные случаи составных фамилий
@@ -62,6 +71,7 @@ def to_dataset_name(full_name: str) -> str:
         "mpetshi": "Mpetshi Perricard",  # Giovanni Mpetshi Perricard
         "van de": "Van de Zandschulp",  # Botic Van de Zandschulp
         "de minaur": "De Minaur",  # Alex De Minaur
+        "auger": "Auger-Aliassime",  # Felix Auger-Aliassime / Auger Aliassime
     }
 
     name_lower = full_name.lower()
@@ -222,22 +232,56 @@ class Predictor:
                 lookup[key] = p
         return lookup
 
+    def _normalize_for_lookup(self, name: str) -> str:
+        """Normalize name for fuzzy lookup: lowercase, replace spaces with dashes in surnames."""
+        return name.lower().replace(" ", "-")
+
+    def _find_best_match(self, normalized_name: str) -> tuple[str, bool]:
+        """Find the best matching player for a normalized name.
+        If multiple matches exist (e.g., 'Auger Aliassime F.' and 'Auger-Aliassime F.'),
+        return the one with more matches (more reliable data).
+        """
+        candidates = []
+        for known in self._known_players:
+            if self._normalize_for_lookup(known) == normalized_name:
+                matches = self.engine.players.get(known)
+                match_count = matches.matches if matches else 0
+                candidates.append((known, match_count))
+
+        if not candidates:
+            return "", False
+
+        # Return the player with most matches
+        best = max(candidates, key=lambda x: x[1])
+        return best[0], True
+
     def resolve_dataset_name(self, raw_name: str) -> tuple[str, bool]:
         raw = str(raw_name).strip()
         if not raw:
             return raw, False
 
-        if raw in self._known_players:
-            return raw, True
+        # Step 1: Normalize and find best match (handles duplicates like "Auger Aliassime F." vs "Auger-Aliassime F.")
+        raw_normalized = self._normalize_for_lookup(raw)
+        best_match, found = self._find_best_match(raw_normalized)
+        if found:
+            return best_match, True
 
+        # Step 2: Exact lowercase lookup (fallback)
         exact = self._exact_name_lookup.get(raw.lower())
         if exact:
             return exact, True
 
+        # Step 3: Canonical form
         canonical = to_dataset_name(raw)
+        canonical_normalized = self._normalize_for_lookup(canonical)
+        best_match, found = self._find_best_match(canonical_normalized)
+        if found:
+            return best_match, True
+
         if canonical in self._known_players:
             return canonical, True
 
+        # Step 4: Surname + initial fallback
         parts = [p for p in raw.split() if p]
         if len(parts) >= 2:
             key = (parts[-1].lower(), parts[0][0].upper())
