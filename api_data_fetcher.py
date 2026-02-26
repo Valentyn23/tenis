@@ -18,11 +18,15 @@ import requests
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import pandas as pd
-
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 # =========================================================
 # CONFIG
 # =========================================================
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", os.getenv("FLASHSCORE_RAPIDAPI_KEY", ""))
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
 RAPIDAPI_HOST = "tennis-api-atp-wta-itf.p.rapidapi.com"
 BASE_URL = f"https://{RAPIDAPI_HOST}/tennis/v2"
 

@@ -79,6 +79,72 @@ def append_bets(ledger_path: str, picks: Iterable[dict], currency: str) -> int:
     return len(rows)
 
 
+def append_selected_bets(ledger_path: str, selected_picks: list[dict], currency: str) -> int:
+    """Append only selected picks to ledger."""
+    path = Path(ledger_path)
+    _ensure_parent(path)
+
+    rows = []
+    now = datetime.now(timezone.utc).isoformat()
+    for p in selected_picks:
+        rows.append(
+            {
+                "timestamp_utc": now,
+                "event_id": p.get("event_id"),
+                "tour_mode": p.get("tour_mode"),
+                "commence_time": p.get("commence_time"),
+                "playerA": p.get("playerA"),
+                "playerB": p.get("playerB"),
+                "pick": p.get("pick"),
+                "decision": p.get("decision"),
+                "reason": p.get("reason"),
+                "oddsA": p.get("oddsA"),
+                "oddsB": p.get("oddsB"),
+                "pick_odds": p.get("pick_odds"),
+                "prob_A_win": p.get("prob_A_win"),
+                "pick_edge": p.get("pick_edge"),
+                "stake": p.get("stake"),
+                "currency": currency,
+                "result": "",
+                "pnl": "",
+            }
+        )
+
+    if not rows:
+        return 0
+
+    is_new = not path.exists()
+    with path.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=LEDGER_FIELDS)
+        if is_new:
+            writer.writeheader()
+        writer.writerows(rows)
+    return len(rows)
+
+
+def update_ledger_result(ledger_path: str, row_index: int, result: str, pnl: float) -> bool:
+    """Update result and pnl for a specific row in ledger."""
+    path = Path(ledger_path)
+    if not path.exists():
+        return False
+
+    with path.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    if row_index < 0 or row_index >= len(rows):
+        return False
+
+    rows[row_index]["result"] = result
+    rows[row_index]["pnl"] = str(pnl)
+
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=LEDGER_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    return True
+
+
 def settle_from_results_csv(ledger_path: str, results_csv: str) -> int:
     """Settle open bets using CSV with columns: event_id,winner.
 

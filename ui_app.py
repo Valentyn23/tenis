@@ -27,7 +27,7 @@ from odds_flashscore import fetch_flashscore_tennis_events
 from predictor import Predictor
 from config_shared import infer_level_from_sport_key, infer_mode_from_sport_key
 from settings import PROFILE_DEFAULTS, load_runtime_settings
-from bets_ledger import append_bets
+from bets_ledger import append_bets, append_selected_bets, update_ledger_result, LEDGER_FIELDS
 from gemini_features import get_pick_opinion, gemini_is_configured
 
 # Page config
@@ -456,7 +456,7 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
 
         picks.append(out)
 
-    append_count = append_bets(cfg["bets_ledger_path"], picks, currency=cfg["currency"])
+    append_count = 0
 
     # Risk multiplier for different sources
     SOURCE_RISK_MULTIPLIER = {
@@ -490,7 +490,7 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
                 "oddsB": float(p.get("oddsB", 0.0)),
                 "reason": p.get("reason") or "",
                 "gemini_stance": g.get("stance", ""),
-                "gemini_conf": g.get("confidence", ""),
+                "gemini_conf": float(g.get("confidence", 0)) if g.get("confidence") else 0.0,
                 "gemini_reason": g.get("short_reason", ""),
             }
         )
@@ -675,9 +675,6 @@ with tab_predictions:
             if pred_meta.get("market_skip_reasons"):
                 st.write("**Market skip reasons:**", pred_meta.get("market_skip_reasons"))
 
-        if saved_bets:
-            st.success(f"✅ Сохранено ставок в ledger: {saved_bets}")
-
     if pred_df.empty:
         st.info("👆 Нажми **'Запустить анализ'** чтобы получить рекомендации.")
     else:
@@ -708,6 +705,110 @@ with tab_predictions:
             filtered_df = filtered_df[filtered_df["source"] == "🔵 Odds API"]
         elif filter_source == "🟢 FlashScore":
             filtered_df = filtered_df[filtered_df["source"] == "🟢 FlashScore"]
+
+        # Добавляем чекбоксы для выбора матчей
+        st.markdown("### Выберите матчи для добавления в Ledger")
+
+        # Инициализация selected_matches в session_state
+        if "selected_matches" not in st.session_state:
+            st.session_state.selected_matches = set()
+
+        # Показываем таблицу с чекбоксами
+        bet_rows = filtered_df[filtered_df["decision"].str.startswith("BET_")].copy()
+
+        if not bet_rows.empty:
+            # Выбрать все / снять все
+            col_sel1, col_sel2, col_sel3 = st.columns([1, 1, 4])
+            with col_sel1:
+                if st.button("✅ Выбрать все"):
+                    for idx in bet_rows.index:
+                        st.session_state.selected_matches.add(idx)
+                    st.rerun()
+            with col_sel2:
+                if st.button("❌ Снять все"):
+                    st.session_state.selected_matches.clear()
+                    st.rerun()
+
+            st.markdown("---")
+
+            for idx, row in bet_rows.iterrows():
+                col_check, col_info = st.columns([0.5, 9.5])
+                with col_check:
+                    is_selected = st.checkbox(
+                        "Выбрать",
+                        value=idx in st.session_state.selected_matches,
+                        key=f"match_{idx}",
+                        label_visibility="collapsed"
+                    )
+                    if is_selected:
+                        st.session_state.selected_matches.add(idx)
+                    else:
+                        st.session_state.selected_matches.discard(idx)
+
+                with col_info:
+                    edge_color = "#22c55e" if row["edge"] > 0.1 else "#f59e0b" if row["edge"] > 0.05 else "#64748b"
+                    st.markdown(f"""
+                    <div style="background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%); padding: 10px 15px; border-radius: 8px; margin-bottom: 8px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <span style="font-weight: 700;">{row['source']}</span> 
+                                <span style="color: #64748b;">|</span>
+                                <span style="font-weight: 600;">{row['tour']}</span>
+                                <span style="color: #64748b;">|</span>
+                                <span>{row['match']}</span>
+                            </div>
+                            <div>
+                                <span style="background: #10b981; color: white; padding: 2px 8px; border-radius: 4px; font-weight: 600;">
+                                    {row['decision']}
+                                </span>
+                                <span style="margin-left: 10px; font-weight: 600;">Pick: {row['pick']}</span>
+                                <span style="margin-left: 10px;">Stake: {row['stake_display']}</span>
+                                <span style="margin-left: 10px; color: {edge_color}; font-weight: 600;">Edge: {row['edge']:+.3f}</span>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            # Кнопка добавления в ledger
+            st.markdown("---")
+            selected_count = len(st.session_state.selected_matches)
+            if st.button(f"📝 Добавить выбранные в Ledger ({selected_count})", type="primary",
+                         disabled=selected_count == 0):
+                # Собираем данные для выбранных матчей
+                selected_picks = []
+                for idx in st.session_state.selected_matches:
+                    if idx in filtered_df.index:
+                        row = filtered_df.loc[idx]
+                        selected_picks.append({
+                            "event_id": f"manual_{idx}_{datetime.now(timezone.utc).timestamp()}",
+                            "tour_mode": row.get("tour"),
+                            "commence_time": "",
+                            "playerA": row.get("match", "").split(" vs ")[0] if " vs " in str(
+                                row.get("match", "")) else "",
+                            "playerB": row.get("match", "").split(" vs ")[1] if " vs " in str(
+                                row.get("match", "")) else "",
+                            "pick": row.get("pick"),
+                            "decision": row.get("decision"),
+                            "reason": row.get("reason"),
+                            "oddsA": row.get("oddsA"),
+                            "oddsB": row.get("oddsB"),
+                            "pick_odds": row.get("oddsA") if row.get("decision") == "BET_A" else row.get("oddsB"),
+                            "prob_A_win": row.get("pA"),
+                            "pick_edge": row.get("edge"),
+                            "stake": row.get("stake"),
+                        })
+
+                if selected_picks:
+                    added = append_selected_bets(cfg["bets_ledger_path"], selected_picks, cfg["currency"])
+                    st.success(f"✅ Добавлено {added} ставок в Ledger!")
+                    st.session_state.selected_matches.clear()
+                    st.rerun()
+        else:
+            st.info("Нет рекомендаций со ставками (BET_A/BET_B)")
+
+        # Показываем полную таблицу ниже
+        st.markdown("---")
+        st.markdown("### Все рекомендации")
 
         view_cols = [
             "source",
@@ -744,7 +845,7 @@ with tab_predictions:
             "oddsB": "{:.2f}",
         })
 
-        st.dataframe(styled, use_container_width=True, height=500)
+        st.dataframe(styled, width="stretch", height=500)
 
         st.markdown("""
         <div style="display: flex; gap: 20px; margin-top: 10px; font-size: 0.85rem;">
@@ -763,31 +864,136 @@ with tab_ledger:
     else:
         ledger_df = pd.read_csv(ledger_path)
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("📊 Всего записей", len(ledger_df))
         with col2:
             total_stake = float(pd.to_numeric(ledger_df.get("stake", 0), errors="coerce").fillna(0).sum())
             st.metric("💰 Сумма ставок", format_money(total_stake, cfg["currency"]))
         with col3:
-            if "timestamp" in ledger_df.columns:
+            total_pnl = float(pd.to_numeric(ledger_df.get("pnl", 0), errors="coerce").fillna(0).sum())
+            pnl_color = "green" if total_pnl >= 0 else "red"
+            st.metric("📈 Общий P/L", format_money(total_pnl, cfg["currency"]))
+        with col4:
+            if "timestamp_utc" in ledger_df.columns:
                 try:
-                    ledger_df["timestamp"] = pd.to_datetime(ledger_df["timestamp"])
-                    last_date = ledger_df["timestamp"].max().strftime("%Y-%m-%d %H:%M")
+                    ledger_df["timestamp_utc"] = pd.to_datetime(ledger_df["timestamp_utc"])
+                    last_date = ledger_df["timestamp_utc"].max().strftime("%Y-%m-%d %H:%M")
                     st.metric("🕐 Последняя запись", last_date)
                 except:
                     st.metric("🕐 Последняя запись", "—")
 
         st.markdown("---")
-        st.dataframe(ledger_df, use_container_width=True, height=420)
+
+        # Редактируемая таблица с результатами
+        st.markdown("### Редактирование результатов")
+        st.markdown("*Выберите результат (Win/Loss) и введите сумму профита/убытка*")
+
+        # Инициализация состояния для редактирования
+        if "ledger_edits" not in st.session_state:
+            st.session_state.ledger_edits = {}
+
+        for idx, row in ledger_df.iterrows():
+            match_info = f"{row.get('playerA', '?')} vs {row.get('playerB', '?')}"
+            pick = row.get('pick', '?')
+            stake = row.get('stake', 0)
+            current_result = str(row.get('result', '')).strip()
+            current_pnl = row.get('pnl', '')
+
+            # Определяем цвет фона в зависимости от результата
+            if current_result.lower() == 'win':
+                bg_color = "#dcfce7"
+            elif current_result.lower() == 'loss':
+                bg_color = "#fee2e2"
+            else:
+                bg_color = "#f8fafc"
+
+            with st.container():
+                st.markdown(f"""
+                <div style="background: {bg_color}; padding: 12px 15px; border-radius: 8px; margin-bottom: 5px; border: 1px solid #e2e8f0;">
+                    <div style="font-weight: 600; margin-bottom: 5px;">
+                        [{row.get('tour_mode', '?')}] {match_info}
+                    </div>
+                    <div style="color: #64748b; font-size: 0.9rem;">
+                        Pick: <b>{pick}</b> | Stake: <b>{format_money(float(stake) if stake else 0, cfg['currency'])}</b> | 
+                        Odds: {row.get('pick_odds', '?')} | Edge: {float(row.get('pick_edge', 0)):+.3f}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                col_res, col_pnl, col_save = st.columns([2, 2, 1])
+
+                with col_res:
+                    result_options = ["Pending", "Win", "Loss"]
+                    current_idx = 0
+                    if current_result.lower() == 'win':
+                        current_idx = 1
+                    elif current_result.lower() == 'loss':
+                        current_idx = 2
+
+                    new_result = st.selectbox(
+                        "Результат",
+                        options=result_options,
+                        index=current_idx,
+                        key=f"result_{idx}",
+                        label_visibility="collapsed"
+                    )
+
+                with col_pnl:
+                    try:
+                        default_pnl = float(current_pnl) if current_pnl and current_pnl != '' else 0.0
+                    except:
+                        default_pnl = 0.0
+
+                    new_pnl = st.number_input(
+                        "Профит",
+                        value=default_pnl,
+                        step=10.0,
+                        format="%.2f",
+                        key=f"pnl_{idx}",
+                        label_visibility="collapsed",
+                        help="Введите сумму выигрыша (положительное) или проигрыша (отрицательное)"
+                    )
+
+                with col_save:
+                    if st.button("💾", key=f"save_{idx}", help="Сохранить изменения"):
+                        result_value = new_result.lower() if new_result != "Pending" else ""
+                        if update_ledger_result(str(ledger_path), idx, result_value, new_pnl):
+                            st.success("✅")
+                            st.rerun()
+                        else:
+                            st.error("❌")
+
+                st.markdown("---")
+
+        # Показываем сводную таблицу
+        st.markdown("### Полная таблица")
+        st.dataframe(ledger_df, width="stretch", height=300)
 
         csv = ledger_df.to_csv(index=False)
-        st.download_button(
-            label="📥 Скачать CSV",
-            data=csv,
-            file_name="betting_ledger.csv",
-            mime="text/csv"
-        )
+        col_dl, col_clear = st.columns([1, 1])
+        with col_dl:
+            st.download_button(
+                label="📥 Скачать CSV",
+                data=csv,
+                file_name="betting_ledger.csv",
+                mime="text/csv"
+            )
+        with col_clear:
+            if st.button("🗑️ Очистить Ledger", type="secondary"):
+                if st.session_state.get("confirm_clear"):
+                    # Очищаем файл
+                    import csv as csv_module
+
+                    with open(ledger_path, 'w', newline='', encoding='utf-8') as f:
+                        writer = csv_module.DictWriter(f, fieldnames=LEDGER_FIELDS)
+                        writer.writeheader()
+                    st.session_state.confirm_clear = False
+                    st.success("Ledger очищен!")
+                    st.rerun()
+                else:
+                    st.session_state.confirm_clear = True
+                    st.warning("Нажмите ещё раз для подтверждения очистки")
 
 with tab_stats:
     st.markdown("### 📊 Аналитика")
@@ -836,7 +1042,7 @@ with tab_stats:
             "edge": "mean"
         }).rename(columns={"match": "Матчей", "stake": "Сумма ставок", "edge": "Средний edge"})
 
-        st.dataframe(tour_stats, use_container_width=True)
+        st.dataframe(tour_stats, width="stretch")
 
 # Footer
 st.markdown("---")

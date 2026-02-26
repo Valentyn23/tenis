@@ -434,6 +434,7 @@ class Predictor:
             pick_odds = float(oddsA)
             pick_edge = float(edgeA)
             stake = float(stakeA)
+            reason = f"edge={edgeA:.1%}, prob={pA:.1%}, kelly={fA:.1%}"
 
         if reason is None and edgeB >= self.min_edge and stakeB > 0 and edgeB > pick_edge:
             decision = "BET_B"
@@ -441,6 +442,11 @@ class Predictor:
             pick_odds = float(oddsB)
             pick_edge = float(edgeB)
             stake = float(stakeB)
+            reason = f"edge={edgeB:.1%}, prob={1 - pA:.1%}, kelly={fB:.1%}"
+        elif decision == "BET_A":
+            pass  # keep reason from BET_A
+        elif reason is None:
+            reason = f"no_edge (edgeA={edgeA:.1%}, edgeB={edgeB:.1%})"
 
         return {
             "playerA": playerA_raw,
