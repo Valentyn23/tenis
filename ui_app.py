@@ -292,9 +292,6 @@ SOURCE_BADGES = {
     "FlashScore": "🟢 FlashScore",
 }
 
-ACTIVE_STRATEGY = "balanced"
-
-
 def format_money(amount: float, currency: str) -> str:
     symbol = CURRENCY_SYMBOLS.get(currency, f"{currency} ")
     return f"{symbol}{amount:.2f}"
@@ -346,7 +343,7 @@ def safe_read_ledger_csv(ledger_path: Path) -> pd.DataFrame:
 
 def make_predictor(mode: str, cfg: dict[str, Any]) -> Optional[Predictor]:
     state_path = cfg["state_path_atp"] if mode == "ATP" else cfg["state_path_wta"]
-    strategy_cfg = PROFILE_DEFAULTS[ACTIVE_STRATEGY]
+    strategy_cfg = PROFILE_DEFAULTS[cfg["risk_profile"]]
     try:
         return Predictor(
             model_path=f"model/{mode.lower()}_model.pkl",
@@ -468,7 +465,8 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
 
     picks = []
     decision_counts = {"BET_A": 0, "BET_B": 0, "NO_BET": 0, "SKIP_MARKET": 0, "SKIP_UNKNOWN_PLAYERS": 0}
-    decision_counts_by_strategy = {ACTIVE_STRATEGY: {"BET_A": 0, "BET_B": 0, "NO_BET": 0, "SKIP_MARKET": 0, "SKIP_UNKNOWN_PLAYERS": 0}}
+    active_strategy = cfg["risk_profile"]
+    decision_counts_by_strategy = {active_strategy: {"BET_A": 0, "BET_B": 0, "NO_BET": 0, "SKIP_MARKET": 0, "SKIP_UNKNOWN_PLAYERS": 0}}
     market_skip_reasons: dict[str, int] = {}
 
     for ev in events:
@@ -493,7 +491,7 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
         out["commence_time"] = ev.get("commence_time")
         out["source"] = ev.get("source", "TheOddsAPI")
         out["is_live"] = ev.get("is_live", False)
-        out["strategy"] = ACTIVE_STRATEGY
+        out["strategy"] = active_strategy
 
         if cfg["gemini_pick_opinion"] and out.get("decision") in {"BET_A", "BET_B"}:
             out["gemini_opinion"] = get_pick_opinion(
@@ -512,7 +510,7 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
         dec = out.get("decision", "NO_BET")
         if dec in decision_counts:
             decision_counts[dec] += 1
-            decision_counts_by_strategy[ACTIVE_STRATEGY][dec] += 1
+            decision_counts_by_strategy[active_strategy][dec] += 1
         if dec == "SKIP_MARKET":
             reason = out.get("reason", "unknown")
             market_skip_reasons[reason] = market_skip_reasons.get(reason, 0) + 1
@@ -605,10 +603,16 @@ with st.sidebar:
 
     st.markdown("---")
 
-    st.markdown("### 📊 Режим")
-    risk_profile = ACTIVE_STRATEGY
-    profile_info = PROFILE_DEFAULTS[ACTIVE_STRATEGY]
-    st.info("Используется только balanced режим.")
+    st.markdown("### 📊 Риск-профиль")
+    risk_profile = st.selectbox(
+        "Профиль",
+        options=list(PROFILE_DEFAULTS.keys()),
+        index=list(PROFILE_DEFAULTS.keys()).index(
+            SETTINGS.risk_profile if SETTINGS.risk_profile in PROFILE_DEFAULTS else "balanced"),
+        label_visibility="collapsed"
+    )
+
+    profile_info = PROFILE_DEFAULTS[risk_profile]
     with st.expander("Детали профиля"):
         st.write(f"Kelly: {profile_info['kelly_fraction']}")
         st.write(f"Max stake: {profile_info['max_stake_pct'] * 100}%")
@@ -687,6 +691,7 @@ cfg = {
     "gemini_pick_opinion": gemini_pick_opinion,
     "bets_ledger_path": SETTINGS.bets_ledger_path,
     "only_prematch": only_prematch,
+    "risk_profile": risk_profile,
 }
 
 # Run predictions
