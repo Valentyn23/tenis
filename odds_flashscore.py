@@ -151,6 +151,162 @@ def parse_match(match: Dict[str, Any], tournament_name: str) -> Optional[Dict[st
         return None
 
 
+
+
+def _team_flag_is_winner(team: dict) -> bool:
+    if not isinstance(team, dict):
+        return False
+    for key in ("winner", "is_winner", "isWinner", "won"):
+        v = team.get(key)
+        if isinstance(v, bool) and v:
+            return True
+        if isinstance(v, (int, float)) and int(v) == 1:
+            return True
+        if isinstance(v, str) and v.strip().lower() in {"1", "true", "yes", "win", "winner"}:
+            return True
+    return False
+
+
+def extract_match_winner_name(match: Dict[str, Any]) -> Optional[str]:
+    """Best-effort winner extraction from FlashScore match payload."""
+    if not isinstance(match, dict):
+        return None
+
+    home_team = match.get("home_team", {}) if isinstance(match.get("home_team", {}), dict) else {}
+    away_team = match.get("away_team", {}) if isinstance(match.get("away_team", {}), dict) else {}
+    home_name = str(home_team.get("name") or "").strip()
+    away_name = str(away_team.get("name") or "").strip()
+
+    winner_raw = match.get("winner")
+    if isinstance(winner_raw, str):
+        w = winner_raw.strip()
+        wl = w.lower()
+        if wl in {"home", "1", "a", "playera"}:
+            return home_name or None
+        if wl in {"away", "2", "b", "playerb"}:
+            return away_name or None
+        if w and w in {home_name, away_name}:
+            return w
+    elif isinstance(winner_raw, (int, float)):
+        if int(winner_raw) == 1:
+            return home_name or None
+        if int(winner_raw) == 2:
+            return away_name or None
+
+    if _team_flag_is_winner(home_team):
+        return home_name or None
+    if _team_flag_is_winner(away_team):
+        return away_name or None
+
+    score = match.get("score") if isinstance(match.get("score"), dict) else {}
+    home_score = score.get("home")
+    away_score = score.get("away")
+    try:
+        if home_score is not None and away_score is not None:
+            hs = float(home_score)
+            as_ = float(away_score)
+            if hs > as_:
+                return home_name or None
+            if as_ > hs:
+                return away_name or None
+    except Exception:
+        pass
+
+    return None
+
+
+def fetch_flashscore_finished_results(days: tuple[int, ...] = (0, -1), sport_id: int = 2) -> Dict[str, str]:
+    """Fetch finished tennis match results as {event_id: winner_name}."""
+    winners: Dict[str, str] = {}
+    for day in days:
+        tournaments = fetch_matches_list(day=day, sport_id=sport_id)
+        if not isinstance(tournaments, list):
+            continue
+
+        for tournament in tournaments:
+            if not isinstance(tournament, dict):
+                continue
+            matches = tournament.get("matches", [])
+            if not isinstance(matches, list):
+                continue
+
+            for match in matches:
+                if not isinstance(match, dict):
+                    continue
+                match_id = str(match.get("match_id") or "").strip()
+                if not match_id:
+                    continue
+
+                match_status = match.get("match_status", {}) if isinstance(match.get("match_status", {}), dict) else {}
+                is_finished = bool(match_status.get("is_finished", False))
+                if not is_finished:
+                    continue
+
+                winner_name = extract_match_winner_name(match)
+                if winner_name:
+                    winners[match_id] = winner_name
+
+    print(f"[FlashScore] Finished winners collected: {len(winners)}")
+    return winners
+
+
+
+def fetch_flashscore_finished_events(days: tuple[int, ...] = (0, -1), sport_id: int = 2) -> List[Dict[str, str]]:
+    """Fetch finished tennis events with winner and participant names."""
+    events: List[Dict[str, str]] = []
+
+    for day in days:
+        tournaments = fetch_matches_list(day=day, sport_id=sport_id)
+        if not isinstance(tournaments, list):
+            continue
+
+        for tournament in tournaments:
+            if not isinstance(tournament, dict):
+                continue
+            matches = tournament.get("matches", [])
+            if not isinstance(matches, list):
+                continue
+
+            for match in matches:
+                if not isinstance(match, dict):
+                    continue
+
+                match_status = match.get("match_status", {}) if isinstance(match.get("match_status", {}), dict) else {}
+                if not bool(match_status.get("is_finished", False)):
+                    continue
+
+                home_team = match.get("home_team", {}) if isinstance(match.get("home_team", {}), dict) else {}
+                away_team = match.get("away_team", {}) if isinstance(match.get("away_team", {}), dict) else {}
+                player_a = str(home_team.get("name") or "").strip()
+                player_b = str(away_team.get("name") or "").strip()
+                if not player_a or not player_b:
+                    continue
+                if is_doubles_match(player_a, player_b):
+                    continue
+
+                winner_name = extract_match_winner_name(match)
+                if not winner_name:
+                    continue
+
+                match_id = str(match.get("match_id") or "").strip()
+
+                timestamp = match.get("timestamp")
+                commence_time = ""
+                if timestamp:
+                    from datetime import datetime, timezone
+                    commence_time = datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+
+                events.append({
+                    "event_id": match_id,
+                    "playerA": player_a,
+                    "playerB": player_b,
+                    "winner": winner_name,
+                    "commence_time": commence_time,
+                })
+
+    print(f"[FlashScore] Finished events collected: {len(events)}")
+    return events
+
 def fetch_flashscore_tennis_events(max_events: int = 30, only_prematch: bool = False) -> List[Dict[str, Any]]:
     """
     Main function to fetch tennis events from FlashScore with odds.

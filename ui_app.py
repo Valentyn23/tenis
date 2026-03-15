@@ -23,11 +23,11 @@ from odds_theoddsapi import (
     list_tennis_sports,
     list_supported_tennis_keys,
 )
-from odds_flashscore import fetch_flashscore_tennis_events
+from odds_flashscore import fetch_flashscore_tennis_events, fetch_flashscore_finished_events
 from predictor import Predictor
 from config_shared import infer_level_from_sport_key, infer_mode_from_sport_key
 from settings import PROFILE_DEFAULTS, load_runtime_settings
-from bets_ledger import append_bets, append_selected_bets, update_ledger_result, LEDGER_FIELDS
+from bets_ledger import append_bets, append_selected_bets, update_ledger_result, settle_from_finished_events, LEDGER_FIELDS
 from gemini_features import get_pick_opinion, gemini_is_configured
 
 # Page config
@@ -295,6 +295,50 @@ SOURCE_BADGES = {
 def format_money(amount: float, currency: str) -> str:
     symbol = CURRENCY_SYMBOLS.get(currency, f"{currency} ")
     return f"{symbol}{amount:.2f}"
+
+
+def safe_read_ledger_csv(ledger_path: Path) -> pd.DataFrame:
+    try:
+        return pd.read_csv(ledger_path)
+    except Exception:
+        rows: list[dict[str, Any]] = []
+        with ledger_path.open("r", encoding="utf-8", newline="") as f:
+            reader = csv_module.reader(f)
+            all_rows = list(reader)
+
+        if not all_rows:
+            return pd.DataFrame(columns=LEDGER_FIELDS)
+
+        header = all_rows[0]
+        data = all_rows[1:]
+        legacy_fields = [c for c in LEDGER_FIELDS if c != "strategy"]
+
+        for raw in data:
+            if not raw:
+                continue
+            if len(raw) == len(LEDGER_FIELDS):
+                row = dict(zip(LEDGER_FIELDS, raw))
+            elif len(raw) == len(legacy_fields):
+                row = dict(zip(legacy_fields, raw))
+                row["strategy"] = "balanced"
+            else:
+                if len(raw) > len(LEDGER_FIELDS):
+                    row = dict(zip(LEDGER_FIELDS, raw[: len(LEDGER_FIELDS)]))
+                else:
+                    padded = list(raw) + [""] * (len(legacy_fields) - len(raw))
+                    row = dict(zip(legacy_fields, padded[: len(legacy_fields)]))
+                    row["strategy"] = "balanced"
+            for col in LEDGER_FIELDS:
+                row.setdefault(col, "")
+            rows.append(row)
+
+        out = pd.DataFrame(rows, columns=LEDGER_FIELDS)
+        # repair file in canonical schema
+        with ledger_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv_module.DictWriter(f, fieldnames=LEDGER_FIELDS)
+            writer.writeheader()
+            writer.writerows(out.to_dict(orient="records"))
+        return out
 
 
 def make_predictor(mode: str, cfg: dict[str, Any]) -> Optional[Predictor]:
@@ -733,12 +777,17 @@ with tab_predictions:
             col_sel1, col_sel2, col_sel3 = st.columns([1, 1, 4])
             with col_sel1:
                 if st.button("✅ Выбрать все"):
-                    for idx in bet_rows.index:
-                        st.session_state.selected_matches.add(idx)
+                    visible = set(int(i) for i in bet_rows.index)
+                    st.session_state.selected_matches.update(visible)
+                    for idx in visible:
+                        st.session_state[f"match_{idx}"] = True
                     st.rerun()
             with col_sel2:
                 if st.button("❌ Снять все"):
-                    st.session_state.selected_matches.clear()
+                    visible = set(int(i) for i in bet_rows.index)
+                    st.session_state.selected_matches.difference_update(visible)
+                    for idx in visible:
+                        st.session_state[f"match_{idx}"] = False
                     st.rerun()
 
             st.markdown("---")
@@ -874,7 +923,7 @@ with tab_ledger:
     if not ledger_path.exists():
         st.info(f"📁 Файл ledger не найден: `{ledger_path}`")
     else:
-        ledger_df = pd.read_csv(ledger_path)
+        ledger_df = safe_read_ledger_csv(ledger_path)
 
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -983,7 +1032,7 @@ with tab_ledger:
         st.dataframe(ledger_df, width="stretch", height=300)
 
         csv = ledger_df.to_csv(index=False)
-        col_dl, col_clear = st.columns([1, 1])
+        col_dl, col_auto, col_clear = st.columns([1, 1, 1])
         with col_dl:
             st.download_button(
                 label="📥 Скачать CSV",
@@ -991,6 +1040,25 @@ with tab_ledger:
                 file_name="betting_ledger.csv",
                 mime="text/csv"
             )
+
+        with col_auto:
+            if st.button("🔄 Авто-результаты из FlashScore", type="secondary"):
+                with st.spinner("Пробую подтянуть finished матчи из FlashScore..."):
+                    try:
+                        finished_events = fetch_flashscore_finished_events(days=(0, -1))
+                        settle_stats = settle_from_finished_events(str(ledger_path), finished_events)
+                        settled = int(settle_stats.get("settled", 0))
+                        if settled > 0:
+                            st.success(
+                                f"✅ Авто-закрыто ставок: {settled} "
+                                f"(event_id: {settle_stats.get('by_event_id', 0)}, "
+                                f"fallback по игрокам: {settle_stats.get('by_match_fallback', 0)})"
+                            )
+                            st.rerun()
+                        else:
+                            st.info("Нет новых совпадений для автозакрытия (ни по event_id, ни по игрокам+времени).")
+                    except Exception as ex:
+                        st.warning(f"Не удалось получить результаты FlashScore: {ex}")
         with col_clear:
             if st.button("🗑️ Очистить Ledger", type="secondary"):
                 if st.session_state.get("confirm_clear"):
