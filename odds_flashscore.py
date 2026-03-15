@@ -70,6 +70,9 @@ def determine_sport_key(tournament_name: str) -> str:
 
     # Default to ATP
     return "tennis_atp_generic"
+def is_doubles_match(player_a: str, player_b: str) -> bool:
+    """Detect doubles format (e.g. "Player A / Player B")."""
+    return "/" in player_a or "/" in player_b
 
 
 def parse_match(match: Dict[str, Any], tournament_name: str) -> Optional[Dict[str, Any]]:
@@ -77,17 +80,25 @@ def parse_match(match: Dict[str, Any], tournament_name: str) -> Optional[Dict[st
     Parse FlashScore match into unified format.
     """
     try:
+        if not isinstance(match, dict):
+            return None
         home_team = match.get("home_team", {})
         away_team = match.get("away_team", {})
-
+        if not isinstance(home_team, dict) or not isinstance(away_team, dict):
+            return None
         player_a = home_team.get("name", "")
         player_b = away_team.get("name", "")
 
         if not player_a or not player_b:
             return None
 
+            # Skip doubles matches (team names usually contain "/")
+        if is_doubles_match(player_a, player_b):
+            return None
         # Get odds
         odds_data = match.get("odds", {})
+        if not isinstance(odds_data, dict):
+            return None
         odds_a = odds_data.get("1")
         odds_b = odds_data.get("2")
 
@@ -107,6 +118,8 @@ def parse_match(match: Dict[str, Any], tournament_name: str) -> Optional[Dict[st
 
         # Get match status
         match_status = match.get("match_status", {})
+        if not isinstance(match_status, dict):
+            match_status = {}
         is_live = match_status.get("is_in_progress", False) or match_status.get("is_started", False)
         is_finished = match_status.get("is_finished", False)
 
@@ -149,23 +162,37 @@ def fetch_flashscore_tennis_events(max_events: int = 30, only_prematch: bool = F
     Returns list of events in unified format.
     """
     events = []
+    skipped_doubles = 0
 
     print(f"[FlashScore] Fetching tennis matches (max {max_events}, prematch_only={only_prematch})...")
 
     # Fetch today's matches (day=0)
     tournaments = fetch_matches_list(day=0, sport_id=2)
+    if not isinstance(tournaments, list):
+        tournaments = []
     print(f"[FlashScore] Found {len(tournaments)} tennis tournaments")
 
     for tournament in tournaments:
         if len(events) >= max_events:
             break
+        if not isinstance(tournament, dict):
+            continue
 
         tournament_name = tournament.get("name", "")
         matches = tournament.get("matches", [])
-
+        if not isinstance(matches, list):
+            continue
         for match in matches:
             if len(events) >= max_events:
                 break
+
+            home_team = match.get("home_team", {})
+            away_team = match.get("away_team", {})
+            player_a = home_team.get("name", "")
+            player_b = away_team.get("name", "")
+            if is_doubles_match(player_a, player_b):
+                skipped_doubles += 1
+                continue
 
             parsed = parse_match(match, tournament_name)
             if not parsed:
@@ -185,5 +212,5 @@ def fetch_flashscore_tennis_events(max_events: int = 30, only_prematch: bool = F
             print(
                 f"[FlashScore] Added [{status}]: {parsed['playerA']} vs {parsed['playerB']} @ {parsed['oddsA']}/{parsed['oddsB']}")
 
-    print(f"[FlashScore] Total events with odds: {len(events)}")
+    print(f"[FlashScore] Total events with odds: {len(events)} | skipped_doubles: {skipped_doubles}")
     return events
