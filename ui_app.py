@@ -292,7 +292,7 @@ SOURCE_BADGES = {
     "FlashScore": "🟢 FlashScore",
 }
 
-ALL_STRATEGIES = ("conservative", "balanced", "aggressive")
+ACTIVE_STRATEGY = "balanced"
 
 
 def format_money(amount: float, currency: str) -> str:
@@ -344,9 +344,9 @@ def safe_read_ledger_csv(ledger_path: Path) -> pd.DataFrame:
         return out
 
 
-def make_predictor(mode: str, strategy: str, cfg: dict[str, Any]) -> Optional[Predictor]:
+def make_predictor(mode: str, cfg: dict[str, Any]) -> Optional[Predictor]:
     state_path = cfg["state_path_atp"] if mode == "ATP" else cfg["state_path_wta"]
-    strategy_cfg = PROFILE_DEFAULTS[strategy]
+    strategy_cfg = PROFILE_DEFAULTS[ACTIVE_STRATEGY]
     try:
         return Predictor(
             model_path=f"model/{mode.lower()}_model.pkl",
@@ -381,14 +381,13 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
         pass
 
     required_modes = {m for m in (infer_mode_from_sport_key(k) for k in tennis_keys) if m in {"ATP", "WTA"}}
-    predictors: dict[str, dict[str, Predictor]] = {s: {} for s in ALL_STRATEGIES}
-    for strategy in ALL_STRATEGIES:
-        for mode in sorted(required_modes):
-            p = make_predictor(mode, strategy, cfg)
-            if p is not None:
-                predictors[strategy][mode] = p
+    predictors: dict[str, Predictor] = {}
+    for mode in sorted(required_modes):
+        p = make_predictor(mode, cfg)
+        if p is not None:
+            predictors[mode] = p
 
-    if not any(predictors.values()):
+    if not predictors:
         return pd.DataFrame(), {"error": "No predictors available", "tennis_keys": tennis_keys}, 0
 
     events = []
@@ -469,61 +468,56 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
 
     picks = []
     decision_counts = {"BET_A": 0, "BET_B": 0, "NO_BET": 0, "SKIP_MARKET": 0, "SKIP_UNKNOWN_PLAYERS": 0}
-    decision_counts_by_strategy = {s: {"BET_A": 0, "BET_B": 0, "NO_BET": 0, "SKIP_MARKET": 0, "SKIP_UNKNOWN_PLAYERS": 0} for s in ALL_STRATEGIES}
+    decision_counts_by_strategy = {ACTIVE_STRATEGY: {"BET_A": 0, "BET_B": 0, "NO_BET": 0, "SKIP_MARKET": 0, "SKIP_UNKNOWN_PLAYERS": 0}}
     market_skip_reasons: dict[str, int] = {}
 
     for ev in events:
         event_mode = infer_mode_from_sport_key(ev.get("sport_key"))
-        if all(event_mode not in predictors[s] for s in ALL_STRATEGIES):
+        if event_mode not in predictors:
             continue
+        pred = predictors[event_mode]
+        out = pred.predict_event(
+            playerA=ev["playerA"],
+            playerB=ev["playerB"],
+            oddsA=ev["oddsA"],
+            oddsB=ev["oddsB"],
+            surface=cfg["default_surface"],
+            level=infer_level_from_sport_key(ev.get("sport_key"), cfg["default_level"])[0],
+            rnd=cfg["default_round"],
+            best_of=cfg["default_best_of"],
+            indoor=cfg["default_indoor"],
+            date_iso=(ev.get("commence_time") or "")[:10] or None,
+        )
+        out["tour_mode"] = event_mode
+        out["event_id"] = ev.get("id")
+        out["commence_time"] = ev.get("commence_time")
+        out["source"] = ev.get("source", "TheOddsAPI")
+        out["is_live"] = ev.get("is_live", False)
+        out["strategy"] = ACTIVE_STRATEGY
 
-        for strategy in ALL_STRATEGIES:
-            pred = predictors[strategy].get(event_mode)
-            if pred is None:
-                continue
-
-            out = pred.predict_event(
-                playerA=ev["playerA"],
-                playerB=ev["playerB"],
-                oddsA=ev["oddsA"],
-                oddsB=ev["oddsB"],
-                surface=cfg["default_surface"],
-                level=infer_level_from_sport_key(ev.get("sport_key"), cfg["default_level"])[0],
-                rnd=cfg["default_round"],
-                best_of=cfg["default_best_of"],
-                indoor=cfg["default_indoor"],
-                date_iso=(ev.get("commence_time") or "")[:10] or None,
+        if cfg["gemini_pick_opinion"] and out.get("decision") in {"BET_A", "BET_B"}:
+            out["gemini_opinion"] = get_pick_opinion(
+                {
+                    "playerA": out.get("playerA"),
+                    "playerB": out.get("playerB"),
+                    "decision": out.get("decision"),
+                    "pick": out.get("pick"),
+                    "prob_A_win": out.get("prob_A_win"),
+                    "oddsA": out.get("oddsA"),
+                    "oddsB": out.get("oddsB"),
+                    "pick_edge": out.get("pick_edge"),
+                }
             )
-            out["tour_mode"] = event_mode
-            out["event_id"] = ev.get("id")
-            out["commence_time"] = ev.get("commence_time")
-            out["source"] = ev.get("source", "TheOddsAPI")
-            out["is_live"] = ev.get("is_live", False)
-            out["strategy"] = strategy
 
-            if cfg["gemini_pick_opinion"] and out.get("decision") in {"BET_A", "BET_B"}:
-                out["gemini_opinion"] = get_pick_opinion(
-                    {
-                        "playerA": out.get("playerA"),
-                        "playerB": out.get("playerB"),
-                        "decision": out.get("decision"),
-                        "pick": out.get("pick"),
-                        "prob_A_win": out.get("prob_A_win"),
-                        "oddsA": out.get("oddsA"),
-                        "oddsB": out.get("oddsB"),
-                        "pick_edge": out.get("pick_edge"),
-                    }
-                )
+        dec = out.get("decision", "NO_BET")
+        if dec in decision_counts:
+            decision_counts[dec] += 1
+            decision_counts_by_strategy[ACTIVE_STRATEGY][dec] += 1
+        if dec == "SKIP_MARKET":
+            reason = out.get("reason", "unknown")
+            market_skip_reasons[reason] = market_skip_reasons.get(reason, 0) + 1
 
-            dec = out.get("decision", "NO_BET")
-            if dec in decision_counts:
-                decision_counts[dec] += 1
-                decision_counts_by_strategy[strategy][dec] += 1
-            if dec == "SKIP_MARKET":
-                reason = out.get("reason", "unknown")
-                market_skip_reasons[reason] = market_skip_reasons.get(reason, 0) + 1
-
-            picks.append(out)
+        picks.append(out)
 
     append_count = 0
 
@@ -611,16 +605,10 @@ with st.sidebar:
 
     st.markdown("---")
 
-    st.markdown("### 📊 Риск-профиль")
-    risk_profile = st.selectbox(
-        "Профиль",
-        options=list(PROFILE_DEFAULTS.keys()),
-        index=list(PROFILE_DEFAULTS.keys()).index(
-            SETTINGS.risk_profile if SETTINGS.risk_profile in PROFILE_DEFAULTS else "balanced"),
-        label_visibility="collapsed"
-    )
-
-    profile_info = PROFILE_DEFAULTS[risk_profile]
+    st.markdown("### 📊 Режим")
+    risk_profile = ACTIVE_STRATEGY
+    profile_info = PROFILE_DEFAULTS[ACTIVE_STRATEGY]
+    st.info("Используется только balanced режим.")
     with st.expander("Детали профиля"):
         st.write(f"Kelly: {profile_info['kelly_fraction']}")
         st.write(f"Max stake: {profile_info['max_stake_pct'] * 100}%")
@@ -717,7 +705,6 @@ saved_bets: int = st.session_state.get("saved_bets", 0)
 tab_predictions, tab_ledger, tab_stats = st.tabs(["📋 Рекомендации", "📒 Ledger", "📊 Статистика"])
 
 with tab_predictions:
-    st.caption("ℹ️ Сейчас анализ всегда запускается сразу по 3 стратегиям: conservative / balanced / aggressive.")
     if pred_meta:
         col1, col2, col3, col4, col5 = st.columns(5)
 
@@ -811,10 +798,12 @@ with tab_predictions:
             for idx, row in bet_rows.iterrows():
                 col_check, col_info = st.columns([0.5, 9.5])
                 with col_check:
+                    checkbox_key = f"match_{idx}"
+                    if checkbox_key not in st.session_state:
+                        st.session_state[checkbox_key] = idx in st.session_state.selected_matches
                     is_selected = st.checkbox(
                         "Выбрать",
-                        value=idx in st.session_state.selected_matches,
-                        key=f"match_{idx}",
+                        key=checkbox_key,
                         label_visibility="collapsed"
                     )
                     if is_selected:

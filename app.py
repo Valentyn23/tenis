@@ -124,13 +124,12 @@ def main():
     preflight = validate_artifacts(required_modes)
     print("Preflight:", preflight)
 
-    strategies = ["conservative", "balanced", "aggressive"]
-    predictors: dict[str, dict[str, Predictor]] = {s: {} for s in strategies}
-    for strategy in strategies:
-        for mode in sorted(required_modes):
-            pred = make_predictor(mode, strategy)
-            if pred is not None:
-                predictors[strategy][mode] = pred
+    strategy = "balanced"
+    predictors: dict[str, Predictor] = {}
+    for mode in sorted(required_modes):
+        pred = make_predictor(mode, strategy)
+        if pred is not None:
+            predictors[mode] = pred
 
     events = []
     for k in tennis_keys:
@@ -150,7 +149,7 @@ def main():
     events = events[: SETTINGS.max_events]
     print(f"Loaded events with odds: {len(events)}")
 
-    if not any(predictors.values()):
+    if not predictors:
         print("No predictors available. Warm up states and retry.")
         return
 
@@ -161,7 +160,7 @@ def main():
     skipped_unknown_tour = 0
     used_by_mode = {"ATP": 0, "WTA": 0}
     decision_counts = {"BET_A": 0, "BET_B": 0, "NO_BET": 0, "SKIP_MARKET": 0, "SKIP_UNKNOWN_PLAYERS": 0}
-    decision_counts_by_strategy = {s: {"BET_A": 0, "BET_B": 0, "NO_BET": 0, "SKIP_MARKET": 0, "SKIP_UNKNOWN_PLAYERS": 0} for s in strategies}
+    decision_counts_by_strategy = {strategy: {"BET_A": 0, "BET_B": 0, "NO_BET": 0, "SKIP_MARKET": 0, "SKIP_UNKNOWN_PLAYERS": 0}}
     market_skip_reasons: dict[str, int] = {}
     cap_stake_hits = 0
 
@@ -173,7 +172,7 @@ def main():
         dt = (ev.get("commence_time") or "")[:10] or None
 
         event_mode = infer_mode_from_sport_key(ev.get("sport_key"))
-        if all(event_mode not in predictors[s] for s in strategies):
+        if event_mode not in predictors:
             skipped_unknown_tour += 1
             continue
 
@@ -182,63 +181,60 @@ def main():
 
         used_by_mode[event_mode] += 1
 
-        for strategy in strategies:
-            pred = predictors[strategy].get(event_mode)
-            if pred is None:
-                continue
+        pred = predictors[event_mode]
 
-            total_players += 2
-            _, a_known = pred.resolve_dataset_name(A)
-            _, b_known = pred.resolve_dataset_name(B)
-            known_players += int(a_known)
-            known_players += int(b_known)
+        total_players += 2
+        _, a_known = pred.resolve_dataset_name(A)
+        _, b_known = pred.resolve_dataset_name(B)
+        known_players += int(a_known)
+        known_players += int(b_known)
 
-            out = pred.predict_event(
-                playerA=A,
-                playerB=B,
-                oddsA=oddsA,
-                oddsB=oddsB,
-                surface=SETTINGS.default_surface,
-                level=level_for_event,
-                rnd=SETTINGS.default_round,
-                best_of=SETTINGS.default_best_of,
-                indoor=SETTINGS.default_indoor,
-                date_iso=dt,
-            )
-            out["tour_mode"] = event_mode
-            out["event_id"] = ev.get("id")
-            out["commence_time"] = ev.get("commence_time")
-            out["strategy"] = strategy
+        out = pred.predict_event(
+            playerA=A,
+            playerB=B,
+            oddsA=oddsA,
+            oddsB=oddsB,
+            surface=SETTINGS.default_surface,
+            level=level_for_event,
+            rnd=SETTINGS.default_round,
+            best_of=SETTINGS.default_best_of,
+            indoor=SETTINGS.default_indoor,
+            date_iso=dt,
+        )
+        out["tour_mode"] = event_mode
+        out["event_id"] = ev.get("id")
+        out["commence_time"] = ev.get("commence_time")
+        out["strategy"] = strategy
 
-            if SETTINGS.gemini_pick_opinion and out.get("decision") in ("BET_A", "BET_B"):
-                payload = {
-                    "playerA": A,
-                    "playerB": B,
-                    "decision": out.get("decision"),
-                    "pick": out.get("pick"),
-                    "prob_A_win": out.get("prob_A_win"),
-                    "oddsA": oddsA,
-                    "oddsB": oddsB,
-                    "edgeA": out.get("edgeA"),
-                    "edgeB": out.get("edgeB"),
-                    "pick_edge": out.get("pick_edge"),
-                }
-                out["gemini_opinion"] = get_pick_opinion(payload)
+        if SETTINGS.gemini_pick_opinion and out.get("decision") in ("BET_A", "BET_B"):
+            payload = {
+                "playerA": A,
+                "playerB": B,
+                "decision": out.get("decision"),
+                "pick": out.get("pick"),
+                "prob_A_win": out.get("prob_A_win"),
+                "oddsA": oddsA,
+                "oddsB": oddsB,
+                "edgeA": out.get("edgeA"),
+                "edgeB": out.get("edgeB"),
+                "pick_edge": out.get("pick_edge"),
+            }
+            out["gemini_opinion"] = get_pick_opinion(payload)
 
-            dec = out.get("decision", "NO_BET")
-            if dec in decision_counts:
-                decision_counts[dec] += 1
-                decision_counts_by_strategy[strategy][dec] += 1
+        dec = out.get("decision", "NO_BET")
+        if dec in decision_counts:
+            decision_counts[dec] += 1
+            decision_counts_by_strategy[strategy][dec] += 1
 
-            if dec == "SKIP_MARKET":
-                reason = out.get("reason", "unknown")
-                market_skip_reasons[reason] = market_skip_reasons.get(reason, 0) + 1
+        if dec == "SKIP_MARKET":
+            reason = out.get("reason", "unknown")
+            market_skip_reasons[reason] = market_skip_reasons.get(reason, 0) + 1
 
-            strategy_cap = SETTINGS.bankroll * float(PROFILE_DEFAULTS[strategy]["max_stake_pct"])
-            if dec in ("BET_A", "BET_B") and float(out.get("stake", 0.0)) >= (strategy_cap - 1e-9):
-                cap_stake_hits += 1
+        strategy_cap = SETTINGS.bankroll * float(PROFILE_DEFAULTS[strategy]["max_stake_pct"])
+        if dec in ("BET_A", "BET_B") and float(out.get("stake", 0.0)) >= (strategy_cap - 1e-9):
+            cap_stake_hits += 1
 
-            picks.append(out)
+        picks.append(out)
 
     picks_no_market_skip = [x for x in picks if x.get("decision") != "SKIP_MARKET"]
     picks_no_market_skip.sort(key=lambda x: (x.get("pick_edge") or 0.0), reverse=True)
