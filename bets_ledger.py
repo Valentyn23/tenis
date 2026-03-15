@@ -8,6 +8,7 @@ from typing import Iterable, Optional
 
 LEDGER_FIELDS = [
     "timestamp_utc",
+    "strategy",
     "event_id",
     "tour_mode",
     "commence_time",
@@ -47,6 +48,7 @@ def append_bets(ledger_path: str, picks: Iterable[dict], currency: str) -> int:
         rows.append(
             {
                 "timestamp_utc": now,
+                "strategy": p.get("strategy", "balanced"),
                 "event_id": p.get("event_id"),
                 "tour_mode": p.get("tour_mode"),
                 "commence_time": p.get("commence_time"),
@@ -90,6 +92,7 @@ def append_selected_bets(ledger_path: str, selected_picks: list[dict], currency:
         rows.append(
             {
                 "timestamp_utc": now,
+                "strategy": p.get("strategy", "balanced"),
                 "event_id": p.get("event_id"),
                 "tour_mode": p.get("tour_mode"),
                 "commence_time": p.get("commence_time"),
@@ -145,20 +148,131 @@ def update_ledger_result(ledger_path: str, row_index: int, result: str, pnl: flo
     return True
 
 
-def settle_from_results_csv(ledger_path: str, results_csv: str) -> int:
-    """Settle open bets using CSV with columns: event_id,winner.
 
-    winner must match one of player names from ledger row.
-    Returns number of settled rows.
-    """
+
+def _parse_iso_dt(value: str):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _norm_player_name(name: str) -> str:
+    s = str(name or "").lower().strip()
+    for ch in [".", "-", "_"]:
+        s = s.replace(ch, " ")
+    s = " ".join(s.split())
+    return s
+
+
+def settle_from_finished_events(
+    ledger_path: str,
+    finished_events: list[dict],
+    max_hours_diff: float = 18.0,
+) -> dict[str, int]:
+    """Settle open bets by exact event_id first, then by (players + time) fallback."""
     ledger = Path(ledger_path)
-    results = Path(results_csv)
-    if not ledger.exists() or not results.exists():
-        return 0
+    if not ledger.exists() or not finished_events:
+        return {"settled": 0, "by_event_id": 0, "by_match_fallback": 0}
 
-    with results.open("r", encoding="utf-8", newline="") as f:
-        rr = csv.DictReader(f)
-        winners = {str(r.get("event_id", "")).strip(): str(r.get("winner", "")).strip() for r in rr}
+    with ledger.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    by_id: dict[str, str] = {}
+    fallback_candidates: list[dict] = []
+    for ev in finished_events:
+        if not isinstance(ev, dict):
+            continue
+        winner = str(ev.get("winner") or "").strip()
+        if not winner:
+            continue
+        eid = str(ev.get("event_id") or "").strip()
+        if eid:
+            by_id[eid] = winner
+        a = _norm_player_name(ev.get("playerA"))
+        b = _norm_player_name(ev.get("playerB"))
+        if a and b:
+            fallback_candidates.append({
+                "p1": a,
+                "p2": b,
+                "winner": winner,
+                "commence_time": _parse_iso_dt(ev.get("commence_time") or ""),
+            })
+
+    settled = 0
+    by_event_id_count = 0
+    by_fallback_count = 0
+
+    for row in rows:
+        if row.get("result"):
+            continue
+
+        winner = ""
+        event_id = str(row.get("event_id") or "").strip()
+        if event_id and event_id in by_id:
+            winner = by_id[event_id]
+            by_event_id_count += 1
+        else:
+            ra = _norm_player_name(row.get("playerA"))
+            rb = _norm_player_name(row.get("playerB"))
+            if not (ra and rb):
+                continue
+            row_dt = _parse_iso_dt(row.get("commence_time") or "")
+
+            best = None
+            best_hours = float("inf")
+            for c in fallback_candidates:
+                if {ra, rb} != {c["p1"], c["p2"]}:
+                    continue
+                cdt = c.get("commence_time")
+                if row_dt is not None and cdt is not None:
+                    diff_h = abs((row_dt - cdt).total_seconds()) / 3600.0
+                    if diff_h > max_hours_diff:
+                        continue
+                else:
+                    diff_h = 0.0
+                if diff_h < best_hours:
+                    best_hours = diff_h
+                    best = c
+
+            if best is not None:
+                winner = str(best["winner"])
+                by_fallback_count += 1
+
+        if not winner:
+            continue
+
+        pick = str(row.get("pick", "")).strip()
+        try:
+            stake = float(row.get("stake") or 0.0)
+            pick_odds = float(row.get("pick_odds") or 0.0)
+        except Exception:
+            continue
+
+        if winner == pick:
+            row["result"] = "win"
+            row["pnl"] = f"{stake * (pick_odds - 1.0):.2f}"
+        else:
+            row["result"] = "loss"
+            row["pnl"] = f"{-stake:.2f}"
+
+        settled += 1
+
+    with ledger.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=LEDGER_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    return {"settled": settled, "by_event_id": by_event_id_count, "by_match_fallback": by_fallback_count}
+
+def settle_from_winners_map(ledger_path: str, winners: dict[str, str]) -> int:
+    """Settle open bets using in-memory winners map {event_id: winner_name}."""
+    ledger = Path(ledger_path)
+    if not ledger.exists() or not winners:
+        return 0
 
     with ledger.open("r", encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f))
@@ -168,7 +282,7 @@ def settle_from_results_csv(ledger_path: str, results_csv: str) -> int:
         if row.get("result"):
             continue
         event_id = str(row.get("event_id", "")).strip()
-        winner = winners.get(event_id)
+        winner = str(winners.get(event_id, "")).strip()
         if not winner:
             continue
 
@@ -193,6 +307,23 @@ def settle_from_results_csv(ledger_path: str, results_csv: str) -> int:
         writer.writerows(rows)
 
     return settled
+
+
+def settle_from_results_csv(ledger_path: str, results_csv: str) -> int:
+    """Settle open bets using CSV with columns: event_id,winner.
+
+    winner must match one of player names from ledger row.
+    Returns number of settled rows.
+    """
+    results = Path(results_csv)
+    if not results.exists():
+        return 0
+
+    with results.open("r", encoding="utf-8", newline="") as f:
+        rr = csv.DictReader(f)
+        winners = {str(r.get("event_id", "")).strip(): str(r.get("winner", "")).strip() for r in rr}
+
+    return settle_from_winners_map(ledger_path, winners)
 
 
 def analyze_ledger(ledger_path: str, bankroll_start: Optional[float] = None) -> dict:
@@ -220,12 +351,28 @@ def analyze_ledger(ledger_path: str, bankroll_start: Optional[float] = None) -> 
 
     total_staked = 0.0
     total_pnl = 0.0
+    by_strategy: dict[str, dict[str, float | int | None]] = {}
     for r in closed:
         try:
-            total_staked += float(r.get("stake") or 0.0)
-            total_pnl += float(r.get("pnl") or 0.0)
+            stake = float(r.get("stake") or 0.0)
+            pnl = float(r.get("pnl") or 0.0)
+            total_staked += stake
+            total_pnl += pnl
+
+            strategy = str(r.get("strategy") or "balanced")
+            agg = by_strategy.setdefault(strategy, {"closed_bets": 0, "total_staked": 0.0, "total_pnl": 0.0, "roi": None})
+            agg["closed_bets"] = int(agg["closed_bets"]) + 1
+            agg["total_staked"] = float(agg["total_staked"]) + stake
+            agg["total_pnl"] = float(agg["total_pnl"]) + pnl
         except Exception:
             pass
+
+    for strategy, agg in by_strategy.items():
+        staked = float(agg["total_staked"])
+        pnl = float(agg["total_pnl"])
+        agg["total_staked"] = round(staked, 2)
+        agg["total_pnl"] = round(pnl, 2)
+        agg["roi"] = round((pnl / staked), 4) if staked > 0 else None
 
     roi = (total_pnl / total_staked) if total_staked > 0 else None
     current_bankroll = (bankroll_start + total_pnl) if bankroll_start is not None else None
@@ -240,4 +387,5 @@ def analyze_ledger(ledger_path: str, bankroll_start: Optional[float] = None) -> 
         "total_pnl": round(total_pnl, 2),
         "roi": round(roi, 4) if roi is not None else None,
         "current_bankroll": round(current_bankroll, 2) if current_bankroll is not None else None,
+        "by_strategy": by_strategy,
     }

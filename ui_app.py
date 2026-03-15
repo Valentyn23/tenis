@@ -23,11 +23,11 @@ from odds_theoddsapi import (
     list_tennis_sports,
     list_supported_tennis_keys,
 )
-from odds_flashscore import fetch_flashscore_tennis_events
+from odds_flashscore import fetch_flashscore_tennis_events, fetch_flashscore_finished_events
 from predictor import Predictor
 from config_shared import infer_level_from_sport_key, infer_mode_from_sport_key
 from settings import PROFILE_DEFAULTS, load_runtime_settings
-from bets_ledger import append_bets, append_selected_bets, update_ledger_result, LEDGER_FIELDS
+from bets_ledger import append_bets, append_selected_bets, update_ledger_result, settle_from_finished_events, LEDGER_FIELDS
 from gemini_features import get_pick_opinion, gemini_is_configured
 
 # Page config
@@ -983,7 +983,7 @@ with tab_ledger:
         st.dataframe(ledger_df, width="stretch", height=300)
 
         csv = ledger_df.to_csv(index=False)
-        col_dl, col_clear = st.columns([1, 1])
+        col_dl, col_auto, col_clear = st.columns([1, 1, 1])
         with col_dl:
             st.download_button(
                 label="📥 Скачать CSV",
@@ -991,6 +991,25 @@ with tab_ledger:
                 file_name="betting_ledger.csv",
                 mime="text/csv"
             )
+
+        with col_auto:
+            if st.button("🔄 Авто-результаты из FlashScore", type="secondary"):
+                with st.spinner("Пробую подтянуть finished матчи из FlashScore..."):
+                    try:
+                        finished_events = fetch_flashscore_finished_events(days=(0, -1))
+                        settle_stats = settle_from_finished_events(str(ledger_path), finished_events)
+                        settled = int(settle_stats.get("settled", 0))
+                        if settled > 0:
+                            st.success(
+                                f"✅ Авто-закрыто ставок: {settled} "
+                                f"(event_id: {settle_stats.get('by_event_id', 0)}, "
+                                f"fallback по игрокам: {settle_stats.get('by_match_fallback', 0)})"
+                            )
+                            st.rerun()
+                        else:
+                            st.info("Нет новых совпадений для автозакрытия (ни по event_id, ни по игрокам+времени).")
+                    except Exception as ex:
+                        st.warning(f"Не удалось получить результаты FlashScore: {ex}")
         with col_clear:
             if st.button("🗑️ Очистить Ledger", type="secondary"):
                 if st.session_state.get("confirm_clear"):
