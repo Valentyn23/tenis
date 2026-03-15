@@ -292,6 +292,8 @@ SOURCE_BADGES = {
     "FlashScore": "🟢 FlashScore",
 }
 
+ALL_STRATEGIES = ("conservative", "balanced", "aggressive")
+
 
 def format_money(amount: float, currency: str) -> str:
     symbol = CURRENCY_SYMBOLS.get(currency, f"{currency} ")
@@ -342,22 +344,23 @@ def safe_read_ledger_csv(ledger_path: Path) -> pd.DataFrame:
         return out
 
 
-def make_predictor(mode: str, cfg: dict[str, Any]) -> Optional[Predictor]:
+def make_predictor(mode: str, strategy: str, cfg: dict[str, Any]) -> Optional[Predictor]:
     state_path = cfg["state_path_atp"] if mode == "ATP" else cfg["state_path_wta"]
+    strategy_cfg = PROFILE_DEFAULTS[strategy]
     try:
         return Predictor(
             model_path=f"model/{mode.lower()}_model.pkl",
             state_path=state_path,
             bankroll=cfg["bankroll"],
-            max_stake_pct=cfg["max_stake_pct"],
-            kelly_fraction_used=cfg["kelly_fraction"],
-            min_edge=cfg["min_edge"],
-            prob_floor=cfg["prob_floor"],
-            prob_ceil=cfg["prob_ceil"],
-            max_overround=cfg["max_overround"],
+            max_stake_pct=float(strategy_cfg["max_stake_pct"]),
+            kelly_fraction_used=float(strategy_cfg["kelly_fraction"]),
+            min_edge=float(strategy_cfg["min_edge"]),
+            prob_floor=float(strategy_cfg["prob_floor"]),
+            prob_ceil=float(strategy_cfg["prob_ceil"]),
+            max_overround=float(strategy_cfg["max_overround"]),
             strict_mode_match=cfg["strict_mode_match"],
-            soft_cap_edge=cfg["soft_cap_edge"],
-            soft_cap_factor=cfg["soft_cap_factor"],
+            soft_cap_edge=float(strategy_cfg["soft_cap_edge"]),
+            soft_cap_factor=float(strategy_cfg["soft_cap_factor"]),
             use_calibration=cfg["use_calibration"],
         )
     except Exception as exc:
@@ -378,13 +381,14 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
         pass
 
     required_modes = {m for m in (infer_mode_from_sport_key(k) for k in tennis_keys) if m in {"ATP", "WTA"}}
-    predictors: dict[str, Predictor] = {}
-    for mode in sorted(required_modes):
-        p = make_predictor(mode, cfg)
-        if p is not None:
-            predictors[mode] = p
+    predictors: dict[str, dict[str, Predictor]] = {s: {} for s in ALL_STRATEGIES}
+    for strategy in ALL_STRATEGIES:
+        for mode in sorted(required_modes):
+            p = make_predictor(mode, strategy, cfg)
+            if p is not None:
+                predictors[strategy][mode] = p
 
-    if not predictors:
+    if not any(predictors.values()):
         return pd.DataFrame(), {"error": "No predictors available", "tennis_keys": tennis_keys}, 0
 
     events = []
@@ -465,53 +469,61 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
 
     picks = []
     decision_counts = {"BET_A": 0, "BET_B": 0, "NO_BET": 0, "SKIP_MARKET": 0, "SKIP_UNKNOWN_PLAYERS": 0}
+    decision_counts_by_strategy = {s: {"BET_A": 0, "BET_B": 0, "NO_BET": 0, "SKIP_MARKET": 0, "SKIP_UNKNOWN_PLAYERS": 0} for s in ALL_STRATEGIES}
     market_skip_reasons: dict[str, int] = {}
 
     for ev in events:
         event_mode = infer_mode_from_sport_key(ev.get("sport_key"))
-        if event_mode not in predictors:
+        if all(event_mode not in predictors[s] for s in ALL_STRATEGIES):
             continue
 
-        out = predictors[event_mode].predict_event(
-            playerA=ev["playerA"],
-            playerB=ev["playerB"],
-            oddsA=ev["oddsA"],
-            oddsB=ev["oddsB"],
-            surface=cfg["default_surface"],
-            level=infer_level_from_sport_key(ev.get("sport_key"), cfg["default_level"])[0],
-            rnd=cfg["default_round"],
-            best_of=cfg["default_best_of"],
-            indoor=cfg["default_indoor"],
-            date_iso=(ev.get("commence_time") or "")[:10] or None,
-        )
-        out["tour_mode"] = event_mode
-        out["event_id"] = ev.get("id")
-        out["commence_time"] = ev.get("commence_time")
-        out["source"] = ev.get("source", "TheOddsAPI")
-        out["is_live"] = ev.get("is_live", False)
+        for strategy in ALL_STRATEGIES:
+            pred = predictors[strategy].get(event_mode)
+            if pred is None:
+                continue
 
-        if cfg["gemini_pick_opinion"] and out.get("decision") in {"BET_A", "BET_B"}:
-            out["gemini_opinion"] = get_pick_opinion(
-                {
-                    "playerA": out.get("playerA"),
-                    "playerB": out.get("playerB"),
-                    "decision": out.get("decision"),
-                    "pick": out.get("pick"),
-                    "prob_A_win": out.get("prob_A_win"),
-                    "oddsA": out.get("oddsA"),
-                    "oddsB": out.get("oddsB"),
-                    "pick_edge": out.get("pick_edge"),
-                }
+            out = pred.predict_event(
+                playerA=ev["playerA"],
+                playerB=ev["playerB"],
+                oddsA=ev["oddsA"],
+                oddsB=ev["oddsB"],
+                surface=cfg["default_surface"],
+                level=infer_level_from_sport_key(ev.get("sport_key"), cfg["default_level"])[0],
+                rnd=cfg["default_round"],
+                best_of=cfg["default_best_of"],
+                indoor=cfg["default_indoor"],
+                date_iso=(ev.get("commence_time") or "")[:10] or None,
             )
+            out["tour_mode"] = event_mode
+            out["event_id"] = ev.get("id")
+            out["commence_time"] = ev.get("commence_time")
+            out["source"] = ev.get("source", "TheOddsAPI")
+            out["is_live"] = ev.get("is_live", False)
+            out["strategy"] = strategy
 
-        dec = out.get("decision", "NO_BET")
-        if dec in decision_counts:
-            decision_counts[dec] += 1
-        if dec == "SKIP_MARKET":
-            reason = out.get("reason", "unknown")
-            market_skip_reasons[reason] = market_skip_reasons.get(reason, 0) + 1
+            if cfg["gemini_pick_opinion"] and out.get("decision") in {"BET_A", "BET_B"}:
+                out["gemini_opinion"] = get_pick_opinion(
+                    {
+                        "playerA": out.get("playerA"),
+                        "playerB": out.get("playerB"),
+                        "decision": out.get("decision"),
+                        "pick": out.get("pick"),
+                        "prob_A_win": out.get("prob_A_win"),
+                        "oddsA": out.get("oddsA"),
+                        "oddsB": out.get("oddsB"),
+                        "pick_edge": out.get("pick_edge"),
+                    }
+                )
 
-        picks.append(out)
+            dec = out.get("decision", "NO_BET")
+            if dec in decision_counts:
+                decision_counts[dec] += 1
+                decision_counts_by_strategy[strategy][dec] += 1
+            if dec == "SKIP_MARKET":
+                reason = out.get("reason", "unknown")
+                market_skip_reasons[reason] = market_skip_reasons.get(reason, 0) + 1
+
+            picks.append(out)
 
     append_count = 0
 
@@ -535,6 +547,7 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
         records.append(
             {
                 "source": source_badge,
+                "strategy": p.get("strategy", "balanced"),
                 "tour": p.get("tour_mode"),
                 "match": f"{p.get('playerA')} vs {p.get('playerB')}",
                 "decision": p.get("decision"),
@@ -562,6 +575,7 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
         "events_by_source": events_by_source,
         "skipped_live": skipped_live,
         "decision_counts": decision_counts,
+        "decision_counts_by_strategy": decision_counts_by_strategy,
         "market_skip_reasons": market_skip_reasons,
     }
     return df, meta, append_count
@@ -703,6 +717,7 @@ saved_bets: int = st.session_state.get("saved_bets", 0)
 tab_predictions, tab_ledger, tab_stats = st.tabs(["📋 Рекомендации", "📒 Ledger", "📊 Статистика"])
 
 with tab_predictions:
+    st.caption("ℹ️ Сейчас анализ всегда запускается сразу по 3 стратегиям: conservative / balanced / aggressive.")
     if pred_meta:
         col1, col2, col3, col4, col5 = st.columns(5)
 
@@ -817,6 +832,8 @@ with tab_predictions:
                                 <span style="color: #64748b;">|</span>
                                 <span style="font-weight: 600;">{row['tour']}</span>
                                 <span style="color: #64748b;">|</span>
+                                <span style="font-weight: 600; text-transform: capitalize;">{row.get('strategy', 'balanced')}</span>
+                                <span style="color: #64748b;">|</span>
                                 <span>{row['match']}</span>
                             </div>
                             <div>
@@ -843,6 +860,7 @@ with tab_predictions:
                         row = filtered_df.loc[idx]
                         selected_picks.append({
                             "event_id": f"manual_{idx}_{datetime.now(timezone.utc).timestamp()}",
+                            "strategy": row.get("strategy", "balanced"),
                             "tour_mode": row.get("tour"),
                             "commence_time": "",
                             "playerA": row.get("match", "").split(" vs ")[0] if " vs " in str(
@@ -874,6 +892,7 @@ with tab_predictions:
 
         view_cols = [
             "source",
+            "strategy",
             "tour",
             "match",
             "decision",
@@ -974,7 +993,7 @@ with tab_ledger:
                 st.markdown(f"""
                 <div style="background: {bg_color}; padding: 12px 15px; border-radius: 8px; margin-bottom: 5px; border: 1px solid #e2e8f0;">
                     <div style="font-weight: 600; margin-bottom: 5px;">
-                        [{row.get('tour_mode', '?')}] {match_info}
+                        [{row.get('tour_mode', '?')}|{row.get('strategy', 'balanced')}] {match_info}
                     </div>
                     <div style="color: #64748b; font-size: 0.9rem;">
                         Pick: <b>{pick}</b> | Stake: <b>{format_money(float(stake) if stake else 0, cfg['currency'])}</b> | 
