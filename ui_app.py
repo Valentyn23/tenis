@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import csv as csv_module
 from typing import Any, Optional
 from datetime import datetime, timezone
 import app
@@ -23,11 +24,11 @@ from odds_theoddsapi import (
     list_tennis_sports,
     list_supported_tennis_keys,
 )
-from odds_flashscore import fetch_flashscore_tennis_events
+from odds_flashscore import fetch_flashscore_tennis_events, fetch_flashscore_finished_events
 from predictor import Predictor
 from config_shared import infer_level_from_sport_key, infer_mode_from_sport_key
 from settings import PROFILE_DEFAULTS, load_runtime_settings
-from bets_ledger import append_bets, append_selected_bets, update_ledger_result, LEDGER_FIELDS
+from bets_ledger import append_bets, append_selected_bets, update_ledger_result, settle_from_finished_events, LEDGER_FIELDS
 from gemini_features import get_pick_opinion, gemini_is_configured
 
 # Page config
@@ -291,28 +292,72 @@ SOURCE_BADGES = {
     "FlashScore": "🟢 FlashScore",
 }
 
-
 def format_money(amount: float, currency: str) -> str:
     symbol = CURRENCY_SYMBOLS.get(currency, f"{currency} ")
     return f"{symbol}{amount:.2f}"
 
 
+def safe_read_ledger_csv(ledger_path: Path) -> pd.DataFrame:
+    try:
+        return pd.read_csv(ledger_path)
+    except Exception:
+        rows: list[dict[str, Any]] = []
+        with ledger_path.open("r", encoding="utf-8", newline="") as f:
+            reader = csv_module.reader(f)
+            all_rows = list(reader)
+
+        if not all_rows:
+            return pd.DataFrame(columns=LEDGER_FIELDS)
+
+        header = all_rows[0]
+        data = all_rows[1:]
+        legacy_fields = [c for c in LEDGER_FIELDS if c != "strategy"]
+
+        for raw in data:
+            if not raw:
+                continue
+            if len(raw) == len(LEDGER_FIELDS):
+                row = dict(zip(LEDGER_FIELDS, raw))
+            elif len(raw) == len(legacy_fields):
+                row = dict(zip(legacy_fields, raw))
+                row["strategy"] = "balanced"
+            else:
+                if len(raw) > len(LEDGER_FIELDS):
+                    row = dict(zip(LEDGER_FIELDS, raw[: len(LEDGER_FIELDS)]))
+                else:
+                    padded = list(raw) + [""] * (len(legacy_fields) - len(raw))
+                    row = dict(zip(legacy_fields, padded[: len(legacy_fields)]))
+                    row["strategy"] = "balanced"
+            for col in LEDGER_FIELDS:
+                row.setdefault(col, "")
+            rows.append(row)
+
+        out = pd.DataFrame(rows, columns=LEDGER_FIELDS)
+        # repair file in canonical schema
+        with ledger_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv_module.DictWriter(f, fieldnames=LEDGER_FIELDS)
+            writer.writeheader()
+            writer.writerows(out.to_dict(orient="records"))
+        return out
+
+
 def make_predictor(mode: str, cfg: dict[str, Any]) -> Optional[Predictor]:
     state_path = cfg["state_path_atp"] if mode == "ATP" else cfg["state_path_wta"]
+    strategy_cfg = PROFILE_DEFAULTS[cfg["risk_profile"]]
     try:
         return Predictor(
             model_path=f"model/{mode.lower()}_model.pkl",
             state_path=state_path,
             bankroll=cfg["bankroll"],
-            max_stake_pct=cfg["max_stake_pct"],
-            kelly_fraction_used=cfg["kelly_fraction"],
-            min_edge=cfg["min_edge"],
-            prob_floor=cfg["prob_floor"],
-            prob_ceil=cfg["prob_ceil"],
-            max_overround=cfg["max_overround"],
+            max_stake_pct=float(strategy_cfg["max_stake_pct"]),
+            kelly_fraction_used=float(strategy_cfg["kelly_fraction"]),
+            min_edge=float(strategy_cfg["min_edge"]),
+            prob_floor=float(strategy_cfg["prob_floor"]),
+            prob_ceil=float(strategy_cfg["prob_ceil"]),
+            max_overround=float(strategy_cfg["max_overround"]),
             strict_mode_match=cfg["strict_mode_match"],
-            soft_cap_edge=cfg["soft_cap_edge"],
-            soft_cap_factor=cfg["soft_cap_factor"],
+            soft_cap_edge=float(strategy_cfg["soft_cap_edge"]),
+            soft_cap_factor=float(strategy_cfg["soft_cap_factor"]),
             use_calibration=cfg["use_calibration"],
         )
     except Exception as exc:
@@ -420,14 +465,16 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
 
     picks = []
     decision_counts = {"BET_A": 0, "BET_B": 0, "NO_BET": 0, "SKIP_MARKET": 0, "SKIP_UNKNOWN_PLAYERS": 0}
+    active_strategy = cfg["risk_profile"]
+    decision_counts_by_strategy = {active_strategy: {"BET_A": 0, "BET_B": 0, "NO_BET": 0, "SKIP_MARKET": 0, "SKIP_UNKNOWN_PLAYERS": 0}}
     market_skip_reasons: dict[str, int] = {}
 
     for ev in events:
         event_mode = infer_mode_from_sport_key(ev.get("sport_key"))
         if event_mode not in predictors:
             continue
-
-        out = predictors[event_mode].predict_event(
+        pred = predictors[event_mode]
+        out = pred.predict_event(
             playerA=ev["playerA"],
             playerB=ev["playerB"],
             oddsA=ev["oddsA"],
@@ -444,6 +491,7 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
         out["commence_time"] = ev.get("commence_time")
         out["source"] = ev.get("source", "TheOddsAPI")
         out["is_live"] = ev.get("is_live", False)
+        out["strategy"] = active_strategy
 
         if cfg["gemini_pick_opinion"] and out.get("decision") in {"BET_A", "BET_B"}:
             out["gemini_opinion"] = get_pick_opinion(
@@ -462,6 +510,7 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
         dec = out.get("decision", "NO_BET")
         if dec in decision_counts:
             decision_counts[dec] += 1
+            decision_counts_by_strategy[active_strategy][dec] += 1
         if dec == "SKIP_MARKET":
             reason = out.get("reason", "unknown")
             market_skip_reasons[reason] = market_skip_reasons.get(reason, 0) + 1
@@ -490,6 +539,7 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
         records.append(
             {
                 "source": source_badge,
+                "strategy": p.get("strategy", "balanced"),
                 "tour": p.get("tour_mode"),
                 "match": f"{p.get('playerA')} vs {p.get('playerB')}",
                 "decision": p.get("decision"),
@@ -517,6 +567,7 @@ def run_predictions(cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any], 
         "events_by_source": events_by_source,
         "skipped_live": skipped_live,
         "decision_counts": decision_counts,
+        "decision_counts_by_strategy": decision_counts_by_strategy,
         "market_skip_reasons": market_skip_reasons,
     }
     return df, meta, append_count
@@ -640,6 +691,7 @@ cfg = {
     "gemini_pick_opinion": gemini_pick_opinion,
     "bets_ledger_path": SETTINGS.bets_ledger_path,
     "only_prematch": only_prematch,
+    "risk_profile": risk_profile,
 }
 
 # Run predictions
@@ -733,12 +785,17 @@ with tab_predictions:
             col_sel1, col_sel2, col_sel3 = st.columns([1, 1, 4])
             with col_sel1:
                 if st.button("✅ Выбрать все"):
-                    for idx in bet_rows.index:
-                        st.session_state.selected_matches.add(idx)
+                    visible = set(int(i) for i in bet_rows.index)
+                    st.session_state.selected_matches.update(visible)
+                    for idx in visible:
+                        st.session_state[f"match_{idx}"] = True
                     st.rerun()
             with col_sel2:
                 if st.button("❌ Снять все"):
-                    st.session_state.selected_matches.clear()
+                    visible = set(int(i) for i in bet_rows.index)
+                    st.session_state.selected_matches.difference_update(visible)
+                    for idx in visible:
+                        st.session_state[f"match_{idx}"] = False
                     st.rerun()
 
             st.markdown("---")
@@ -746,10 +803,12 @@ with tab_predictions:
             for idx, row in bet_rows.iterrows():
                 col_check, col_info = st.columns([0.5, 9.5])
                 with col_check:
+                    checkbox_key = f"match_{idx}"
+                    if checkbox_key not in st.session_state:
+                        st.session_state[checkbox_key] = idx in st.session_state.selected_matches
                     is_selected = st.checkbox(
                         "Выбрать",
-                        value=idx in st.session_state.selected_matches,
-                        key=f"match_{idx}",
+                        key=checkbox_key,
                         label_visibility="collapsed"
                     )
                     if is_selected:
@@ -766,6 +825,8 @@ with tab_predictions:
                                 <span style="font-weight: 700;">{row['source']}</span> 
                                 <span style="color: #64748b;">|</span>
                                 <span style="font-weight: 600;">{row['tour']}</span>
+                                <span style="color: #64748b;">|</span>
+                                <span style="font-weight: 600; text-transform: capitalize;">{row.get('strategy', 'balanced')}</span>
                                 <span style="color: #64748b;">|</span>
                                 <span>{row['match']}</span>
                             </div>
@@ -793,6 +854,7 @@ with tab_predictions:
                         row = filtered_df.loc[idx]
                         selected_picks.append({
                             "event_id": f"manual_{idx}_{datetime.now(timezone.utc).timestamp()}",
+                            "strategy": row.get("strategy", "balanced"),
                             "tour_mode": row.get("tour"),
                             "commence_time": "",
                             "playerA": row.get("match", "").split(" vs ")[0] if " vs " in str(
@@ -824,6 +886,7 @@ with tab_predictions:
 
         view_cols = [
             "source",
+            "strategy",
             "tour",
             "match",
             "decision",
@@ -874,7 +937,7 @@ with tab_ledger:
     if not ledger_path.exists():
         st.info(f"📁 Файл ledger не найден: `{ledger_path}`")
     else:
-        ledger_df = pd.read_csv(ledger_path)
+        ledger_df = safe_read_ledger_csv(ledger_path)
 
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -924,7 +987,7 @@ with tab_ledger:
                 st.markdown(f"""
                 <div style="background: {bg_color}; padding: 12px 15px; border-radius: 8px; margin-bottom: 5px; border: 1px solid #e2e8f0;">
                     <div style="font-weight: 600; margin-bottom: 5px;">
-                        [{row.get('tour_mode', '?')}] {match_info}
+                        [{row.get('tour_mode', '?')}|{row.get('strategy', 'balanced')}] {match_info}
                     </div>
                     <div style="color: #64748b; font-size: 0.9rem;">
                         Pick: <b>{pick}</b> | Stake: <b>{format_money(float(stake) if stake else 0, cfg['currency'])}</b> | 
@@ -983,7 +1046,7 @@ with tab_ledger:
         st.dataframe(ledger_df, width="stretch", height=300)
 
         csv = ledger_df.to_csv(index=False)
-        col_dl, col_clear = st.columns([1, 1])
+        col_dl, col_auto, col_clear = st.columns([1, 1, 1])
         with col_dl:
             st.download_button(
                 label="📥 Скачать CSV",
@@ -991,6 +1054,25 @@ with tab_ledger:
                 file_name="betting_ledger.csv",
                 mime="text/csv"
             )
+
+        with col_auto:
+            if st.button("🔄 Авто-результаты из FlashScore", type="secondary"):
+                with st.spinner("Пробую подтянуть finished матчи из FlashScore..."):
+                    try:
+                        finished_events = fetch_flashscore_finished_events(days=(0, -1))
+                        settle_stats = settle_from_finished_events(str(ledger_path), finished_events)
+                        settled = int(settle_stats.get("settled", 0))
+                        if settled > 0:
+                            st.success(
+                                f"✅ Авто-закрыто ставок: {settled} "
+                                f"(event_id: {settle_stats.get('by_event_id', 0)}, "
+                                f"fallback по игрокам: {settle_stats.get('by_match_fallback', 0)})"
+                            )
+                            st.rerun()
+                        else:
+                            st.info("Нет новых совпадений для автозакрытия (ни по event_id, ни по игрокам+времени).")
+                    except Exception as ex:
+                        st.warning(f"Не удалось получить результаты FlashScore: {ex}")
         with col_clear:
             if st.button("🗑️ Очистить Ledger", type="secondary"):
                 if st.session_state.get("confirm_clear"):
